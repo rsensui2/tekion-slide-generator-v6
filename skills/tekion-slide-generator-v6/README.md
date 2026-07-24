@@ -1,4 +1,4 @@
-# TEKION Slide Generator v6 — 「全枚数、確実に、同じ顔で。」
+# TEKION Slide Generator v6
 
 **Markdown / テキスト → 高品質な日本語 16:9 スライド → PPTX / PDF** を Claude Code から自動生成するスキル。
 画像生成は **Codex 内蔵 gpt-image-2（ChatGPT/Codex サブスク枠）** を既定に、必要なら OpenAI API（従量課金）・

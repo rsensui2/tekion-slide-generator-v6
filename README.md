@@ -1,4 +1,4 @@
-# TEKION Slide Generator — 「全枚数、確実に、同じ顔で。」
+# TEKION Slide Generator
 
 **Markdown / テキスト → 日本語 16:9 スライド → ブラウザスライドダッシュボードでレビュー → PPTX / PDF** を、
 Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF の取り込み改修にも対応。

@@ -62,6 +62,8 @@ class FeedbackWorkerE2ETest(unittest.TestCase):
 
     def _run_worker(self, env_extra=None):
         env = dict(os.environ)
+        # ワーカー子プロセスの save_manifest が実台帳（~/.tekion-slides）を汚さないように
+        env["TEKION_SLIDES_HOME"] = str(Path(self.temp.name) / "slides-home")
         env.update(env_extra or {})
         return subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "feedback_worker.py"),

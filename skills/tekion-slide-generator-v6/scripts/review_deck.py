@@ -422,38 +422,49 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   /* ===== スタート画面（ハブ） ===== */
   .landing { max-width: 1180px; margin: 0 auto; padding: 0 24px; text-align: center; }
 
-  /* ヒーロー: TEKION のダーク帯 + オレンジのオーロラ */
+  /* ヒーロー: Ryoko バナー + でっかいプロダクト名 */
   .landing .hero {
     position: relative; overflow: hidden; border-radius: 28px;
-    margin: 26px auto 0; padding: 58px 56px 54px; text-align: left;
-    background: linear-gradient(135deg, #171717, #262626); color: #fff;
+    margin: 26px auto 0; text-align: left; min-height: 300px;
+    background: linear-gradient(120deg, #fff, var(--orange-bg));
+    border: 1px solid var(--line); box-shadow: var(--shadow-sm);
   }
-  .landing .hero::before, .landing .hero::after {
-    content: ""; position: absolute; border-radius: 50%;
-    filter: blur(70px); pointer-events: none;
+  .landing .hero .herobg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; object-position: right center; display: block;
   }
-  .landing .hero::before { width: 520px; height: 520px; right: -150px; top: -240px;
-    background: radial-gradient(circle, rgba(255,90,0,.55), transparent 65%); }
-  .landing .hero::after { width: 420px; height: 420px; left: -140px; bottom: -260px;
-    background: radial-gradient(circle, rgba(255,154,0,.32), transparent 65%); }
-  .landing .hero .eyebrow { color: var(--orange-light); font-size: 11px; }
-  .landing .hero h2 {
-    margin: 16px 0 10px; font-size: clamp(26px, 3.6vw, 40px);
-    font-weight: 900; letter-spacing: .02em; line-height: 1.4;
+  .landing .hero .heroin {
+    position: relative; z-index: 1; padding: 54px 56px 50px; max-width: 62%;
   }
-  .landing .hero h2 em { font-style: normal; background: var(--grad);
-    -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .landing .hero p.lead { margin: 0; color: #c9c9c9; font-size: 14px; line-height: 2; }
+  .landing .hero .eyebrow { font-size: 11px; }
+  .landing .hero h2.htitle {
+    margin: 14px 0 12px;
+    font-family: "Space Grotesk", "Inter", sans-serif;
+    font-size: clamp(34px, 4.8vw, 58px); font-weight: 700;
+    letter-spacing: -0.01em; line-height: 1.04; color: var(--ink-dark);
+  }
+  .landing .hero .vbadge {
+    display: inline-block; vertical-align: middle; transform: translateY(-.18em);
+    margin-left: .35em; font-size: .34em; font-weight: 700; letter-spacing: .1em;
+    background: var(--grad); color: #fff; padding: .3em .8em; border-radius: 999px;
+  }
+  .landing .hero p.lead { margin: 0; color: var(--sub); font-size: 14.5px;
+                          line-height: 2; font-weight: 600; }
   .landing .hero .backlink {
-    position: absolute; top: 24px; right: 24px; z-index: 1;
+    position: absolute; top: 24px; right: 24px; z-index: 2;
     display: inline-flex; align-items: center; gap: 6px;
-    border: 1px solid rgba(255,255,255,.3); border-radius: 999px;
-    padding: 9px 18px; color: #fff; text-decoration: none;
-    font-size: 12.5px; font-weight: 700; background: rgba(255,255,255,.08);
-    transition: background .15s, border-color .15s;
+    border: 1.5px solid var(--orange); border-radius: 999px;
+    padding: 9px 18px; color: var(--orange-dark); text-decoration: none;
+    font-size: 12.5px; font-weight: 700; background: rgba(255,255,255,.8);
+    backdrop-filter: blur(6px);
+    transition: background .15s, color .15s;
   }
-  .landing .hero .backlink:hover { background: rgba(255,90,0,.25);
-                                   border-color: var(--orange-light); }
+  .landing .hero .backlink:hover { background: var(--grad); color: #fff;
+                                   border-color: transparent; }
+  @media (max-width: 900px) {
+    .landing .hero .heroin { max-width: 100%; padding: 40px 28px 36px;
+                             background: linear-gradient(90deg, #ffffffee, #ffffff88); }
+  }
 
   /* セクション見出し: eyebrow + 和文見出しの2段（tekion-web の型） */
   .sec-head { display: flex; flex-direction: column; gap: 8px;
@@ -1622,11 +1633,13 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
         def _data_uri(name):
             p = os.path.join(ui_dir, name)
             if os.path.exists(p):
+                mime = "image/jpeg" if name.lower().endswith((".jpg", ".jpeg")) else "image/png"
                 with open(p, "rb") as image_file:
-                    return "data:image/png;base64," + _b64.b64encode(image_file.read()).decode()
+                    return f"data:{mime};base64," + _b64.b64encode(image_file.read()).decode()
             return None
 
         btn_import = _data_uri("btn_import.png")
+        hero_banner = _data_uri("hero_ryoko.jpg")
 
         # 最近のセッション（現在のセッション以外・実在するもの）: note 風のカードグリッド
         recent_html = ""
@@ -1688,12 +1701,15 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
           <small>.pptx / .pdf / 画像 をここにドロップ、<br>またはクリックして選択</small></label>
       </div>"""
 
+        herobg = (f'        <img class="herobg" src="{hero_banner}" alt="">\n'
+                  if hero_banner else "")
         landing = f"""    <section class="landing">
       <div class="hero">
-{backlink}        <span class="eyebrow">Tekion Slide Generator</span>
-        <h2>全枚数、確実に、<em>同じ顔で。</em></h2>
-        <p class="lead">スライドの生成・赤入れ・書き出しまで、この画面がハブになります。<br>
-新しく作るときはエージェントに「◯◯のスライドを作って」と言うだけ。既存デッキはここにドロップ。</p>
+{herobg}{backlink}        <div class="heroin">
+          <span class="eyebrow">Tekion Group</span>
+          <h2 class="htitle">TEKION<br>Slide Generator<span class="vbadge">V6</span></h2>
+          <p class="lead">新しく作るときはエージェントに「◯◯のスライドを作って」と言うだけ。<br>既存デッキはここにドロップ。赤入れも書き出しも、この画面がハブになります。</p>
+        </div>
       </div>
 {choices}
 {recent_html}      <section class="onboard">
