@@ -254,19 +254,33 @@ ${PYTHON} "${SKILL_DIR}/scripts/codex_app_server_client.py" \
 
 ## Phase 6: リファレンス画像マップ（任意）
 
-特定スライドに参照画像（キャラクター・写真等）を渡す場合:
+**まずアセットライブラリを確認する**。よく使うキャラクター・写真の常設置き場:
+
+```bash
+ASSETS_DIR="${TEKION_ASSETS_DIR:-$HOME/.tekion-slides/assets}"
+[ -f "${ASSETS_DIR}/assets.md" ] && cat "${ASSETS_DIR}/assets.md"
+```
+
+`assets.md` には各アセットの「使いどころ」が書かれている。スライド構成とユーザー指示を照らし、
+該当するスライドに割り当てる。**ユーザー指示にアセットの名前（例:「りょーこ」）があれば、
+該当スライドで必ず参照画像に含め、プロンプトに「参照画像のキャラクターの顔立ち・髪型・雰囲気を
+忠実に保つこと」を追記する**。アセットの登録・追加は design-setup スキル
+（「デザインを設定したい」「キャラクターを登録したい」）で行える。
+
+割り当ては reference_image_map.json に書く:
 
 ```bash
 cat > "${SESSION_DIR}/reference_image_map.json" << 'JSONEOF'
 {
-  "Ryoko": "/path/to/ryoko_avatar.jpeg",
+  "00_cover": "/Users/<user>/.tekion-slides/assets/ryoko_avatar.jpeg",
   "5-1.1_オープニング_07": "/path/to/specific_image.png"
 }
 JSONEOF
 ```
 
-キーはスライドベース名への部分一致（完全一致優先）。ユーザーが画像を添付した場合は
-`${SESSION_DIR}/images/` にコピーしてマップに登録する。
+キーはスライドベース名への部分一致（完全一致優先）。ユーザーがその場で画像を添付した場合は
+`${SESSION_DIR}/images/` にコピーしてマップに登録する（毎回使うものなら、アセットライブラリへの
+登録を提案する）。
 
 ## Phase 7: スライド画像生成
 
@@ -278,6 +292,7 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
   --prompts-dir "${SESSION_DIR}/prompts" \
   --output-dir "${SESSION_DIR}/images" \
   --image-size 2K \
+  --reference-image-map "${SESSION_DIR}/reference_image_map.json" \
   --logo "${LOGO}"
 ```
 
@@ -320,14 +335,20 @@ ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" -
 `slide_order` に保存され、表示・PPTX/PDF エクスポートに自動反映される。削除済みスライドは
 再生成でも復活しない（`--force` 時のみ復活）。
 ユーザーがブラウザで「修正を依頼する」を押した瞬間にこのプロセスが完了する。
-完了通知を受けたら `${SESSION_DIR}/slide_feedback.json` を Read し
-（`{"feedback": {"02_solution_02": "修正指示", ...}}` 形式）、エントリごとに下の差分編集を
-実行して、終わったら再び `--serve` で開いて再確認してもらう。feedback が空 = 全スライド校了。
+完了通知を受けたら `${SESSION_DIR}/slide_feedback.json` を Read する。形式:
+`{"feedback": {"02_solution_02": "修正指示", ...}, "rebuild": ["05_summary_01", ...]}`。
+- `rebuild` にあるスライド = ユーザーが「前の画像を参照せず、ゼロから作り直す」を選んだもの。
+  差分編集ではなく `edit_slide.py --rebuild` で作り直す。feedback 側の同スライドの指示は
+  互換用マーカー「【作り直し】…」の行で始まるので、**その行を取り除いた残り**（あれば）を
+  `--instruction` に使う。残りが無ければ同じプロンプトからの再生成 = 引き直し
+- `feedback` のみのスライド = 通常の差分編集
+処理が終わったら再び `--serve` で開いて再確認してもらう。両方空 = 全スライド校了。
 自分でも生成画像を Read で目視し、明白な問題（文字化け・欠け）は聞かれる前に直す。
 
 修正の種類で使い分ける:
 - 見た目の微修正（数値・色・1要素）→ 指示編集
 - ユーザーが画像に赤で書き込んで指示 → 赤ペン編集
+- デザイン・構成をガラッと変えたい（rebuild 指定）→ 作り直し（--rebuild）
 - 文字構成から変えたい → slides_plan.json を修正して Phase 4→7 を再実行（resume で該当スライドだけ生成される）
 
 ```bash
@@ -346,6 +367,14 @@ ${PYTHON} "${SKILL_DIR}/scripts/edit_slide.py" \
   --slide 02_solution_02 \
   --annotated /path/to/annotated.png \
   --instruction "この領域を簡素化"
+
+# 作り直し: 前の画像を参照せず、元の生成プロンプト（+指示）から再生成
+# （キャラクター等を出すなら --reference-image でアセットを渡せる）
+${PYTHON} "${SKILL_DIR}/scripts/edit_slide.py" \
+  --session-dir "${SESSION_DIR}" \
+  --slide 05_summary_01 --rebuild \
+  --instruction "写真中心のレイアウトをやめて、図解中心の構成に" \
+  --logo "${LOGO}"
 
 # ロールバック: 編集で悪化したら1つ前の版に戻す
 ${PYTHON} "${SKILL_DIR}/scripts/edit_slide.py" \

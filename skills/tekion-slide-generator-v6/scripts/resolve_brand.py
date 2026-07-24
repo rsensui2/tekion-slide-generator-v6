@@ -41,6 +41,21 @@ def _resolve_presets_dir() -> Path:
     return SKILL_DIR / "references" / "presets"
 
 
+def _resolve_assets_dir() -> Path | None:
+    """アセットライブラリ（キャラクター・写真等の常設参照画像）: 環境変数 → ユーザーホーム。
+
+    assets.md（各アセットの使いどころを書いた台帳）があるときだけ有効とみなす。
+    """
+    import os as _os
+    env = _os.environ.get("TEKION_ASSETS_DIR")
+    candidates = [Path(env).expanduser()] if env else []
+    candidates.append(Path.home() / ".tekion-slides" / "assets")
+    for d in candidates:
+        if (d / "assets.md").is_file():
+            return d
+    return None
+
+
 PRESETS_DIR = _resolve_presets_dir()
 DEFAULT_LOGO = SKILL_DIR / "assets" / "logo.png"
 VALID_POSITIONS = ("bottom-right", "bottom-left", "top-right", "top-left")
@@ -61,6 +76,7 @@ def resolve() -> dict:
         "logo_position": "bottom-right",
         "logo_scale": 0.09,
         "footer_text": None,  # None = デフォルト透かしのまま
+        "assets_dir": (str(d) if (d := _resolve_assets_dir()) else None),
     }
 
     if slug:
@@ -113,6 +129,8 @@ def main() -> None:
     print(f"export SLIDE_LOGO_SCALE={shlex.quote(str(result['logo_scale']))}")
     if result["footer_text"] is not None:
         print(f"export SLIDE_FOOTER_TEXT={shlex.quote(result['footer_text'])}")
+    if result["assets_dir"]:
+        print(f"ASSETS_DIR={shlex.quote(result['assets_dir'])}")
 
 
 if __name__ == "__main__":

@@ -324,12 +324,21 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .slip .label .kanji { font-size: 14px; font-weight: 700; letter-spacing: .28em; color: var(--red); }
   .slip .label .sub { font-family: "Space Grotesk", sans-serif;
                       font-size: 9px; color: #e0958f; letter-spacing: .14em; }
+  .slip .slipmain { display: flex; flex-direction: column; min-width: 0; }
   .slip textarea {
-    width: 100%; min-height: 68px; resize: vertical; border: 0; background: transparent;
-    color: var(--red); padding: 15px 18px; font-size: 15px; line-height: 1.75;
+    width: 100%; min-height: 68px; flex: 1; resize: vertical; border: 0; background: transparent;
+    color: var(--red); padding: 15px 18px 8px; font-size: 15px; line-height: 1.75;
     font-family: inherit; font-weight: 600;
   }
   .slip textarea::placeholder { color: #d8a5a1; font-weight: 400; }
+  .rebuild-opt {
+    display: flex; align-items: center; gap: 7px;
+    padding: 0 18px 12px; font-size: 12px; font-weight: 600; color: #c08d88;
+    cursor: pointer; user-select: none;
+  }
+  .rebuild-opt input { accent-color: var(--red); width: 14px; height: 14px; margin: 0;
+                       cursor: pointer; }
+  .rebuild-opt:has(input:checked) { color: var(--red); }
   .slip .send {
     align-self: stretch; display: flex; align-items: center; justify-content: center;
     border: 0; border-left: 1px solid #f0c9c5;
@@ -763,6 +772,7 @@ function readAsB64(file) {
   });
 }
 async function importFiles(files) {
+  if (submitted) return;
   const valid = files.filter(f => IMPORT_EXTS.some(x => f.name.toLowerCase().endsWith(x)));
   if (!valid.length) { alert('対応形式: ' + IMPORT_EXTS.join(' / ')); return; }
   const btn = document.getElementById('import-btn');
@@ -827,6 +837,7 @@ function applySelection(c, node) {
   if (railImg) railImg.src = node.dataset.src;
 }
 async function selectVersion(node) {
+  if (submitted) return;
   const c = card(node);
   const prev = c.querySelector('.vnode.current');
   if (prev === node) return;
@@ -882,6 +893,7 @@ async function postOrder() {
   }
 }
 function moveSlide(btn, dir) {
+  if (submitted) return;
   const c = card(btn);
   const sib = dir < 0 ? c.previousElementSibling : c.nextElementSibling;
   if (!sib || !sib.classList.contains('proof')) return;
@@ -953,6 +965,7 @@ function copyPrompt(btn) {
 let undoPending = null;
 let undoTimer = null;
 async function deleteSlide(btn) {
+  if (submitted) return;
   const c = card(btn);
   const base = c.dataset.slide;
   const railItem = railMap[c.id];
@@ -1018,10 +1031,13 @@ document.querySelectorAll('article.proof').forEach(a => spy.observe(a));
 
 /* --- 修正指示 --- */
 function markCard(el) {
-  const inked = el.value.trim().length > 0;
   const c = card(el);
+  const text = c.querySelector('textarea').value.trim();
+  const rb = c.querySelector('.rebuild-opt input');
+  const rebuild = !!(rb && rb.checked);
+  const inked = text.length > 0 || rebuild;
   c.classList.toggle('has-ink', inked);
-  c.querySelector('.state').textContent = inked ? '要修正' : '校了';
+  c.querySelector('.state').textContent = rebuild ? '作り直し' : (inked ? '要修正' : '校了');
   const railItem = railMap[c.id];
   if (railItem) {
     railItem.classList.toggle('has-ink', inked);
@@ -1037,7 +1053,10 @@ function updateTally() {
 function freeze(message) {
   submitted = true;
   document.getElementById('done-banner').classList.add('show');
-  document.querySelectorAll('textarea, .slip .send').forEach(t => t.disabled = true);
+  // 送信後は manifest を変える操作をすべて凍結する（送信済み内容との競合防止）
+  document.querySelectorAll('textarea, .slip .send, .rebuild-opt input, .hbtn, .vnode')
+    .forEach(t => t.disabled = true);
+  document.querySelectorAll('.rail a[draggable]').forEach(a => a.removeAttribute('draggable'));
   const btn = document.getElementById('submit-btn');
   btn.disabled = true; btn.textContent = message;
 }
@@ -1047,25 +1066,48 @@ async function post(payload) {
     body: JSON.stringify(payload) });
   if (!res.ok) throw new Error(res.status);
 }
+/* rebuild は専用配列に加え、rebuild キーを知らない旧エージェントにも依頼が
+   届くよう feedback にもマーカー付きで複製する（新エージェントはマーカー行を除いて読む） */
+const REBUILD_MARK = '【作り直し】前の画像を参照せず、ゼロから再生成する。';
+function slipEntry(c) {
+  const t = c.querySelector('textarea');
+  if (!t) return null;  // プレースホルダーには記入欄が無い
+  const text = t.value.trim();
+  const rb = c.querySelector('.rebuild-opt input');
+  return { base: c.dataset.slide, text, rebuild: !!(rb && rb.checked) };
+}
+function addEntry(payload, e) {
+  if (e.rebuild) {
+    payload.rebuild.push(e.base);
+    payload.feedback[e.base] = e.text ? REBUILD_MARK + '\n' + e.text : REBUILD_MARK;
+  } else if (e.text) {
+    payload.feedback[e.base] = e.text;
+  }
+}
 async function sendOne(btn) {
-  const c = card(btn);
-  const text = c.querySelector('textarea').value.trim();
-  if (!text) { alert('修正指示を書いてから送信してください'); return; }
+  const e = slipEntry(card(btn));
+  if (!e || (!e.text && !e.rebuild)) {
+    alert('修正指示を書くか、「ゼロから作り直す」にチェックしてから送信してください');
+    return;
+  }
   btn.disabled = true; btn.textContent = '…';
   try {
-    await post({ session_dir: SESSION_DIR, feedback: { [c.dataset.slide]: text } });
+    const payload = { session_dir: SESSION_DIR, feedback: {}, rebuild: [] };
+    addEntry(payload, e);
+    await post(payload);
     freeze('修正を依頼しました');
-  } catch (e) {
+  } catch (err) {
     btn.disabled = false; btn.textContent = '⏎';
     alert('送信に失敗しました（サーバが終了している可能性）');
   }
 }
 function collectAll() {
-  const out = {};
-  document.querySelectorAll('textarea[data-slide]').forEach(t => {
-    if (t.value.trim()) out[t.dataset.slide] = t.value.trim();
+  const payload = { session_dir: SESSION_DIR, feedback: {}, rebuild: [] };
+  document.querySelectorAll('article.proof[data-slide]').forEach(c => {
+    const e = slipEntry(c);
+    if (e) addEntry(payload, e);
   });
-  return { session_dir: SESSION_DIR, feedback: out };
+  return payload;
 }
 async function submitAll() {
   const payload = collectAll();
@@ -1124,7 +1166,11 @@ __VTREE__
       </div>
       <div class="slip">
         <div class="label"><span class="kanji">修正指示</span><span class="sub">FEEDBACK</span></div>
-        <textarea data-slide="__NAME__" placeholder="このスライドへの修正指示（空欄なら校了）" oninput="markCard(this)"></textarea>
+        <div class="slipmain">
+          <textarea data-slide="__NAME__" placeholder="このスライドへの修正指示（空欄なら校了）" oninput="markCard(this)"></textarea>
+          <label class="rebuild-opt" title="デザイン・構成をガラッと変えたいときに。前の画像を参照として送らず、プロンプト（+上の指示）から再生成します">
+            <input type="checkbox" data-rebuild="__NAME__" onchange="markCard(this)"> 🔄 前の画像を参照せず、ゼロから作り直す</label>
+        </div>
         <button class="send" onclick="sendOne(this)" title="この修正を依頼" aria-label="この修正を依頼">⏎</button>
       </div>
     </article>"""
@@ -1780,10 +1826,14 @@ def report_feedback(handle) -> int:
     if not handle.received.is_set():
         return 2
     with open(handle.feedback_path, "r", encoding="utf-8") as f:
-        fb = json.load(f).get("feedback", {})
+        data = json.load(f)
+    fb = data.get("feedback", {})
+    rebuild = data.get("rebuild", [])
     print(f"✅ フィードバック受信: {handle.feedback_path}")
-    if fb:
-        print(f"   要修正 {len(fb)}枚: {', '.join(sorted(fb))}")
+    targets = sorted(set(fb) | set(rebuild))
+    if targets:
+        marks = [(b + " [作り直し]" if b in rebuild else b) for b in targets]
+        print(f"   要修正 {len(targets)}枚: {', '.join(marks)}")
     else:
         print("   全スライド校了")
     return 0

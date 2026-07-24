@@ -10,12 +10,15 @@
   - ロゴ・フッターは raw（焼き込み前画像）から編集して決定的に再合成する
     （焼き込み済み画像を参照にすると、モデルがロゴを「再描画」して崩れるため）
 
-2つの編集モード:
+3つの編集モード:
   1. 指示編集（--instruction）: 現行スライドを参照画像に渡し、
      「指示された変更のみ適用、他は同一に保て」と指示する
   2. 赤ペン編集（--annotated）: 赤で注釈を書き込んだ画像を唯一の参照として渡す。
      きれいな元画像を併送すると、モデルが無編集の元画像を返しがちなため、
      注釈入り1枚だけを渡す
+  3. 作り直し（--rebuild）: 前の画像を一切参照せず、元の生成プロンプト（+指示）から
+     新しいデザインで再生成する。「ガラッと変えたい」とき用。バージョン保存・
+     ロールバックは通常編集と同じに効く
 
 使用例:
     # 指示編集
@@ -75,6 +78,10 @@ def parse_args():
     parser.add_argument('--slide', required=True, help='スライドベース名（例: 02_solution_02）')
     parser.add_argument('--instruction', default='', help='編集指示（自然言語）')
     parser.add_argument('--annotated', help='赤ペン注釈済み画像パス（指定時は赤ペン編集モード）')
+    parser.add_argument('--rebuild', action='store_true',
+                        help='前の画像を参照せず、元の生成プロンプト（+指示）から作り直す')
+    parser.add_argument('--reference-image',
+                        help='--rebuild 時に渡す参照画像（キャラクター等のアセット。任意）')
     parser.add_argument('--rollback', action='store_true', help='1つ前のバージョンに戻す')
     parser.add_argument('--provider', default='codex', choices=['codex', 'openai', 'mock'],
                         help='画像生成プロバイダ（デフォルト: codex）')
@@ -100,7 +107,10 @@ def rollback(manifest: dict, manifest_path: str, slide_base: str) -> int:
     if validate_image(prev) is not None:
         print(f"❌ ロールバック先が破損しています: {prev}")
         return 1
-    update_entry(manifest, slide_base, current_image=prev, state='validated')
+    # raw も同じ版に切り替える（current だけ戻すと次回編集が別版の raw を参照してしまう）
+    raw_candidate = os.path.join(os.path.dirname(prev), 'raw', os.path.basename(prev))
+    update_entry(manifest, slide_base, current_image=prev, state='validated',
+                 raw_image=raw_candidate if os.path.exists(raw_candidate) else None)
     save_manifest(manifest_path, manifest)
     print(f"↩️  ロールバック完了: {slide_base} → {os.path.basename(prev)}")
     print("   (export は manifest の current_image を使うため、次回 export から反映されます)")
@@ -121,8 +131,8 @@ def main():
     if args.rollback:
         return rollback(manifest, manifest_path, slide_base)
 
-    if not args.instruction and not args.annotated:
-        print("❌ --instruction か --annotated のどちらかを指定してください")
+    if not args.instruction and not args.annotated and not args.rebuild:
+        print("❌ --instruction / --annotated / --rebuild のいずれかを指定してください")
         return 1
 
     current = entry.get('current_image')
@@ -146,7 +156,58 @@ def main():
         candidate = os.path.join(raw_dir, os.path.basename(current))
         raw_image = candidate if os.path.exists(candidate) else None
 
-    if args.annotated:
+    if args.rebuild:
+        # 作り直し: 前の画像を参照せず、元の生成プロンプト（+指示）から再生成する。
+        # デザイン・構成をガラッと変えたいとき、前の画像の参照が邪魔になるため。
+        # prompt_file が古い（セッション移動等）場合はセッション内の prompts/ に落ちる
+        prompt_candidates = [entry.get('prompt_file'),
+                             os.path.join(session_dir, 'prompts', f"{slide_base}.txt")]
+        prompt_file = next((p for p in prompt_candidates if p and os.path.exists(p)), None)
+        base_prompt = None
+        if prompt_file:
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                base_prompt = f.read()
+        if base_prompt:
+            prompt = base_prompt
+            if args.instruction:
+                prompt += ("\n\n[作り直しにあたっての指示]\n"
+                           f"{args.instruction}\n"
+                           "この指示を反映し、前とは異なる新しいデザイン・構成で作ること。")
+        elif args.instruction:
+            # 取り込みスライド等プロンプトが無い場合は、指示そのものから作る
+            prompt = EDIT_PROMPT_TEMPLATE.format(instruction=args.instruction).replace(
+                "添付の参照画像は「現在のスライド」です。これを編集して完成版を返してください。",
+                "16:9 の日本語プレゼンテーションスライドを新規に1枚生成してください。")
+        else:
+            print(f"❌ 作り直し不可: {slide_base} の生成プロンプトが見つかりません"
+                  f"（--instruction で作り直しの内容を指定してください）")
+            return 1
+        if args.reference_image:
+            if not os.path.exists(args.reference_image):
+                print(f"❌ 参照画像が見つかりません: {args.reference_image}")
+                return 1
+            reference = args.reference_image
+        else:
+            # 初回生成で使ったアセット参照（キャラクター等）を自動継承する
+            reference = None
+            map_path = os.path.join(session_dir, 'reference_image_map.json')
+            if os.path.exists(map_path):
+                import json as _json
+                try:
+                    with open(map_path, 'r', encoding='utf-8') as f:
+                        ref_map = _json.load(f)
+                except (_json.JSONDecodeError, OSError):
+                    ref_map = {}
+                cand = ref_map.get(slide_base)
+                if not cand:
+                    for pattern, image_path in ref_map.items():
+                        if pattern in slide_base or slide_base in pattern:
+                            cand = image_path
+                            break
+                if cand and os.path.exists(cand):
+                    reference = cand
+        edit_from_raw = True  # 新規生成と同じ扱い: raw を保存しロゴ・フッターを再合成する
+    elif args.annotated:
         if not os.path.exists(args.annotated):
             print(f"❌ 注釈画像が見つかりません: {args.annotated}")
             return 1
@@ -169,10 +230,15 @@ def main():
     versions = entry.get('versions', [])
     output_path, version_no = next_version_path(images_dir, slide_base, versions)
 
-    print(f"🎨 差分編集: {slide_base} → v{version_no} ({os.path.basename(output_path)})")
-    print(f"   参照: {os.path.basename(reference)}"
-          + (" (raw)" if edit_from_raw else "")
-          + (" [赤ペン編集]" if args.annotated else ""))
+    mode_label = "作り直し" if args.rebuild else "差分編集"
+    print(f"🎨 {mode_label}: {slide_base} → v{version_no} ({os.path.basename(output_path)})")
+    if args.rebuild:
+        print("   参照: なし（前の画像を参照せず再生成）"
+              + (f" + アセット参照 {os.path.basename(reference)}" if reference else ""))
+    else:
+        print(f"   参照: {os.path.basename(reference)}"
+              + (" (raw)" if edit_from_raw else "")
+              + (" [赤ペン編集]" if args.annotated else ""))
 
     from providers import get_provider, ImageRequest
 
@@ -207,12 +273,17 @@ def main():
         return 1
 
     new_raw = os.path.join(raw_dir, os.path.basename(output_path))
+    # rebuild で新 raw が無い場合（プロバイダが raw 非対応等）は旧 raw を残さない:
+    # 旧デザインの raw を次回編集で参照してしまうため
     update_entry(manifest, slide_base,
                  state='validated',
                  current_image=output_path,
-                 raw_image=new_raw if os.path.exists(new_raw) else entry.get('raw_image'),
+                 raw_image=new_raw if os.path.exists(new_raw)
+                 else (None if args.rebuild else entry.get('raw_image')),
                  versions=versions + [output_path],
-                 last_edit_instruction=args.instruction[:300] if args.instruction else '(mark edit)')
+                 last_edit_instruction=('(rebuild) ' if args.rebuild else '')
+                 + (args.instruction[:300] if args.instruction
+                    else ('' if args.rebuild else '(mark edit)')))
     save_manifest(manifest_path, manifest)
 
     print(f"✅ 編集完了: {os.path.basename(output_path)} が確定版になりました")

@@ -65,6 +65,9 @@ cp -r skills/tekion-slide-generator-v6 ~/.codex/skills/
 - 作ったプリセットは `~/.tekion-slides/presets/` に保存され（**プラグインを更新しても消えない**）、
   次回から「スライドを作って」だけで自社デザインが自動適用される
 - 微調整は「ロゴを左下に」「メインカラーをもう少し暗く」のように言えば反映される
+- **キャラクター・写真の登録**: 「キャラクターを登録したい」と言って画像を渡すと
+  `~/.tekion-slides/assets/` のアセットライブラリに保存され、以後「◯◯を出して」と
+  言うだけで該当スライドの参照画像として自動で使われる
 
 詳細な実行手順は [skills/tekion-slide-generator-v6/SKILL.md](skills/tekion-slide-generator-v6/SKILL.md)。
 

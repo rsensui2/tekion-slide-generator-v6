@@ -8,8 +8,9 @@
   v1 が失われる。オーケストレータも `next_version_path()` を使い、raw も同版番号で保存する
 - **manifest の lost update**: generator とダッシュボードが並行に load→save すると相互上書き。
   `fcntl.flock` で read-modify-write を排他する（atomic rename は破損防止のみ）
-- **rollback 時の raw 不整合**: `current_image` だけ戻り `raw_image` が新版のまま。
-  version ごとに {finished, raw} の組で管理して同時に切り替える
+- **OpenAI provider の編集契約不整合**: raw_dir / skip_finish / logo_path を処理せず
+  常にフッターのみ焼き込む。Codex provider と同じ「raw 保存 → ロゴ合成 → フッター」の
+  順序を実装する（edit_slide/rebuild を --provider openai で使うと raw が作られない）
 - **resume ハッシュの不足**: prompt+アンカー名のみ。参照画像・logo・footer・provider・
   image-size の変更を検知しない。生成設定を canonical JSON 化して hash に含める
 
