@@ -1099,7 +1099,7 @@ function slipEntry(c) {
 function addEntry(payload, e) {
   if (e.rebuild) {
     payload.rebuild.push(e.base);
-    payload.feedback[e.base] = e.text ? REBUILD_MARK + '\n' + e.text : REBUILD_MARK;
+    payload.feedback[e.base] = e.text ? REBUILD_MARK + '\\n' + e.text : REBUILD_MARK;
   } else if (e.text) {
     payload.feedback[e.base] = e.text;
   }
