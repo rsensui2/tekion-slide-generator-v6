@@ -1,6 +1,6 @@
 # TEKION Slide Generator — 「全枚数、確実に、同じ顔で。」
 
-**Markdown / テキスト → 日本語 16:9 スライド → ブラウザ校正室でレビュー → PPTX / PDF** を、
+**Markdown / テキスト → 日本語 16:9 スライド → ブラウザスライドダッシュボードでレビュー → PPTX / PDF** を、
 Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF の取り込み改修にも対応。
 
 画像生成は **Codex 内蔵 gpt-image-2（ChatGPT サブスク枠）** — API キー・従量課金なしで動く。
@@ -9,7 +9,7 @@ Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF �
 
 | 柱 | 内容 |
 |---|---|
-| 校正室 | 生成実況・スライド毎の赤入れ→ワンクリック修正依頼・バージョン比較（選択=確定）・PPTX/PDFダウンロードを1画面で |
+| スライドダッシュボード | 生成実況・スライド毎の赤入れ→ワンクリック修正依頼・バージョン比較（選択=確定）・PPTX/PDFダウンロードを1画面で |
 | ゼロ欠損保証 | manifest + 生成後の機械検証 + 検証スイープ + resume。「N枚頼んだらN枚返る」 |
 | フルスロットル並列 | 枚数ぶん一斉ファンアウト（上限20）。429検知で AIMD 自動減速 |
 | 直せる | 差分編集・赤ペン編集・ロールバック。既存 PPTX/PDF もドロップで取り込んで改修 |
@@ -45,13 +45,26 @@ codex plugin add tekion-slide-generator@tekion-slide-generator
 cp -r skills/tekion-slide-generator-v6 ~/.codex/skills/
 ```
 
-## 使い方
+## 使い方（3ステップ）
 
-インストール後、エージェントにそのまま話しかける:
+インストール後、エージェント（Claude Code / Codex）にそのまま話しかける:
 
-- 「このMarkdownからスライドを作って」 → 生成 → 校正室が開いて実況 → 赤入れ → 書き出し
-- 「このパワポ（PPTX/PDF）を直したい」 → 校正室にドロップ → 1枚ずつ分解 → 赤入れ → 差分編集
-- 校正室だけ開く: `python3 skills/tekion-slide-generator-v6/scripts/review_deck.py --session-dir <dir> --serve`
+1. **作る / 読み込む** — 「◯◯のスライドを作って」。既存の PPTX/PDF を直すならスライドダッシュボードにドロップ
+2. **赤入れで直す** — ブラウザに開くダッシュボードで、直したいスライドの赤い記入欄に指示を書いて ⏎。AI が該当スライドだけ描き直し、版を比較して選べる
+3. **持っていく** — 右上の ⤓ PPTX / ⤓ PDF でダウンロード
+
+ダッシュボードだけ開く: `python3 skills/tekion-slide-generator-v6/scripts/review_deck.py --session-dir <dir> --serve`
+
+## 自社デザインへのカスタマイズ（design-setup 同梱）
+
+エージェントに **「デザインを設定したい」** と言うだけで、対話形式のオンボーディングが始まる:
+
+- **素材ファースト**: ロゴ画像・スライドマスターの PPTX・ブランドガイドや既存資料のスクショ・
+  コーポレートサイト URL — 手元にあるものを渡すと解釈して配色・フォント・ロゴ位置を抽出
+- **質問に答えるだけでも OK**: 素材が無ければメインカラーとトーンを聞かれる程度
+- 作ったプリセットは `~/.tekion-slides/presets/` に保存され（**プラグインを更新しても消えない**）、
+  次回から「スライドを作って」だけで自社デザインが自動適用される
+- 微調整は「ロゴを左下に」「メインカラーをもう少し暗く」のように言えば反映される
 
 詳細な実行手順は [skills/tekion-slide-generator-v6/SKILL.md](skills/tekion-slide-generator-v6/SKILL.md)。
 
@@ -65,7 +78,7 @@ tekion-slide-generator/
 └── skills/
     └── tekion-slide-generator-v6/   # 本体（両エージェント共通）
         ├── SKILL.md                 # 実行手順（Phase 1〜9）
-        ├── scripts/                 # 生成・校正室・取り込み・export（Python）
+        ├── scripts/                 # 生成・スライドダッシュボード・取り込み・export（Python）
         ├── templates/               # プロンプトテンプレート（Jinja2）
         ├── references/              # デザインガイドライン・プリセット
         └── assets/                  # ロゴ・UI素材
