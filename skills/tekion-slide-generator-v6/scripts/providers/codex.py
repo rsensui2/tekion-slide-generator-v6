@@ -79,17 +79,38 @@ def _normalize_to_16_9(image_bytes: bytes, target_w: int, target_h: int) -> byte
     return buf.getvalue()
 
 
+LOGO_POSITIONS = ("bottom-right", "bottom-left", "top-right", "top-left")
+
+
 def _composite_logo(image_bytes: bytes, logo_path: str) -> bytes:
-    """画像右下にロゴを合成する（幅の約9%、余白付き）。"""
+    """画像の指定コーナーにロゴを合成する。
+
+    ブランドごとの調整は環境変数で行う（design-setup が preset config から設定する）:
+      SLIDE_LOGO_POSITION: bottom-right(default) / bottom-left / top-right / top-left
+      SLIDE_LOGO_SCALE:    画像幅に対するロゴ幅の比率（default 0.09）
+    """
     from PIL import Image
 
     if not logo_path or not os.path.exists(logo_path):
         return image_bytes
 
+    position = os.environ.get("SLIDE_LOGO_POSITION", "bottom-right")
+    if position not in LOGO_POSITIONS:
+        sys.stderr.write(
+            f"[composite_logo] warning: unknown SLIDE_LOGO_POSITION={position}, "
+            f"using bottom-right\n"
+        )
+        position = "bottom-right"
+    try:
+        scale = float(os.environ.get("SLIDE_LOGO_SCALE", "0.09"))
+    except ValueError:
+        scale = 0.09
+    scale = min(max(scale, 0.02), 0.30)
+
     base = Image.open(BytesIO(image_bytes)).convert("RGBA")
     logo = Image.open(logo_path).convert("RGBA")
 
-    target_w = max(1, int(base.width * 0.09))
+    target_w = max(1, int(base.width * scale))
     ratio = target_w / logo.width
     target_h = max(1, int(logo.height * ratio))
     logo = logo.resize((target_w, target_h), Image.LANCZOS)
@@ -98,8 +119,8 @@ def _composite_logo(image_bytes: bytes, logo_path: str) -> bytes:
     # ピクセル換算で大きくなり、ロゴが下端から浮いて「高い位置」に見えてしまう。
     margin_x = int(base.width * 0.015)
     margin_y = int(base.height * 0.015)
-    x = base.width - target_w - margin_x
-    y = base.height - target_h - margin_y
+    x = margin_x if position.endswith("left") else base.width - target_w - margin_x
+    y = margin_y if position.startswith("top") else base.height - target_h - margin_y
     base.alpha_composite(logo, (x, y))
 
     buf = BytesIO()
