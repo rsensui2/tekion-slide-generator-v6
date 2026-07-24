@@ -814,10 +814,17 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
             # 表示はサムネイル(serve時)、ダウンロード等は原本を使う
             return f"thumb/{_q(rel)}?w={w}" if use_thumbs else rel
 
-        cur_label = f"v{versions.index(current) + 1}"
+        import re as _re
+
+        def vnum(p):
+            mnum = _re.search(r'_v(\d+)\.png$', os.path.basename(p))
+            return int(mnum.group(1)) if mnum else 1
+
+        cur_label = f"v{vnum(current)}"
 
         vnodes = []
-        for i, v in enumerate(versions, start=1):
+        for v in versions:
+            i = vnum(v)
             rel = os.path.relpath(v, session_dir)
             classes = "vnode"
             if v == current:
@@ -1137,6 +1144,12 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True):
 
         def log_message(self, *a):
             pass
+
+    cloud_markers = ("/Library/CloudStorage/", "/Dropbox/", "/OneDrive")
+    if any(mk in session_dir for mk in cloud_markers):
+        print("⚠️  セッションがクラウド同期フォルダ配下にあります。同期による manifest の"
+              "巻き戻り・書き込み瞬断が起き得ます。セッションはローカルディスクに作り、"
+              "完成した PPTX/PDF だけをクラウドへ置くことを推奨します")
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = httpd.server_address[1]
