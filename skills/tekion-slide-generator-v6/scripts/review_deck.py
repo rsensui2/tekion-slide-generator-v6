@@ -308,6 +308,16 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     background: var(--grad); color: #fff;
   }
   .vnode.current .badge { visibility: visible; }
+  .vnode .vtime { margin-left: auto; font-family: "Space Grotesk", sans-serif;
+                  font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #ok-toast {
+    display: none; position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 24px; z-index: 55;
+    background: var(--ink-dark); color: #fff; border-radius: 999px;
+    padding: 11px 24px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 20px 40px -12px rgba(0,0,0,.5);
+  }
+  #ok-toast.show { display: block; }
 
   /* 修正指示スリップ + 送信 */
   /* 赤入れ欄: 常に赤ペンの体裁（書いた文字も赤） */
@@ -649,6 +659,7 @@ __SITES_LOGO__<a href="https://tekion.jp" target="_blank" rel="noopener">tekion.
 
 <button id="reload-banner" onclick="location.reload()">デッキが更新されました — 再読み込み</button>
 <div id="undo-toast"><span id="undo-msg">スライドを削除しました</span><button onclick="undoDelete()">元に戻す</button></div>
+<div id="ok-toast"></div>
 <div id="drop-overlay"><div class="box">ここにドロップして読み込み<br>
 <small>.pptx / .pdf は1枚ずつのスライドに分解 / PNG・JPG は1枚のスライドとして追加</small></div></div>
 
@@ -857,10 +868,18 @@ async function selectVersion(node) {
       try { detail = (await res.json()).error || ''; } catch (_) {}
       throw new Error(detail || ('HTTP ' + res.status));
     }
+    flashToast(node.dataset.label + ' を確定版にしました');
   } catch (e) {
     if (prev) applySelection(c, prev);  // 失敗したら元に戻す
     alert('確定の保存に失敗しました: ' + e.message);
   }
+}
+function flashToast(msg) {
+  const t = document.getElementById('ok-toast');
+  t.textContent = '✓ ' + msg;
+  t.classList.add('show');
+  clearTimeout(flashToast._tm);
+  flashToast._tm = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
 /* --- 索引レールのスクロール連動 --- */
@@ -888,6 +907,7 @@ async function postOrder() {
     const res = await fetch('/reorder', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ order }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    flashToast('並び順を保存しました');
   } catch (e) {
     alert('並び順の保存に失敗しました: ' + e.message + '\\n再読み込みして確認してください。');
   }
@@ -1299,12 +1319,18 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
         cur_label = f"v{vnum(current)}"
 
         vnodes = []
+        import datetime as _dtmod
         for v in versions:
             i = vnum(v)
             rel = rel_image(v)
             classes = "vnode"
             if v == current:
                 classes += " current"
+            try:
+                # 生成時刻: 再生成同士は見た目が似るため、どれが新しいか一目で分かるように
+                vtime = _dtmod.datetime.fromtimestamp(os.path.getmtime(v)).strftime("%H:%M")
+            except OSError:
+                vtime = ""
             vnodes.append(
                 f'          <button class="{classes}" data-src="{html.escape(disp(rel, THUMB_MAIN_W))}" '
                 f'data-orig="{html.escape(rel)}" '
@@ -1312,7 +1338,8 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
                 f'onclick="selectVersion(this)">'
                 f'<img src="{html.escape(disp(rel, THUMB_VER_W))}" loading="lazy" alt="v{i}">'
                 f'<span class="vmeta"><span class="vname">v{i}</span>'
-                f'<span class="badge">確定</span></span></button>')
+                f'<span class="badge">確定</span>'
+                f'<span class="vtime">{vtime}</span></span></button>')
 
         multi = len(versions) > 1
         vtree = ""

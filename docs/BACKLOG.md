@@ -4,8 +4,6 @@
 
 ## 高（正しさに関わる）
 
-- **Phase 7 再生成のバージョニング**: プロンプト変更時の再生成が `<base>.png` を上書きし、
-  v1 が失われる。オーケストレータも `next_version_path()` を使い、raw も同版番号で保存する
 - **manifest の lost update**: generator とダッシュボードが並行に load→save すると相互上書き。
   `fcntl.flock` で read-modify-write を排他する（atomic rename は破損防止のみ）
 - **OpenAI provider の編集契約不整合**: raw_dir / skip_finish / logo_path を処理せず

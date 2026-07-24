@@ -31,8 +31,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest_utils import (
-    classify_error, get_entry, load_manifest, prompt_hash, save_manifest,
-    set_session_status, summarize, update_entry, validate_image,
+    classify_error, get_entry, load_manifest, next_version_path, prompt_hash,
+    save_manifest, set_session_status, summarize, update_entry, validate_image,
 )
 
 PARALLEL_CAP_DEFAULT = 20  # 実測: 2K・並列20で throttle なし（20枚/68秒）
@@ -272,6 +272,15 @@ def build_tasks(prompt_files, args, manifest, images_dir, raw_dir,
             skipped += 1
             continue
 
+        # 健全な既存版があるスライドの再生成（プロンプト変更・--force）は、<base>.png を
+        # 上書きせず次の版番号で保存する（過去版・バージョン比較・ロールバックを守る）
+        current = entry.get('current_image')
+        if current and os.path.exists(current) and validate_image(current) is None:
+            versions = [v for v in (entry.get('versions') or [current]) if os.path.exists(v)]
+            if current not in versions:
+                versions.append(current)
+            output_path, _ver = next_version_path(images_dir, slide_base, versions)
+
         update_entry(manifest, slide_base,
                      state='pending', prompt_sha256=p_hash,
                      prompt_file=os.path.abspath(prompt_file))
@@ -320,7 +329,8 @@ def run_pass(tasks, args, retry_script, per_slide_timeout, gate, abort_event,
                 versions = entry.get('versions', [])
                 if task['output_path'] not in versions:
                     versions = versions + [task['output_path']]
-                raw_path = os.path.join(task['raw_dir'], f"{slide_base}.png") if task['raw_dir'] else None
+                raw_path = (os.path.join(task['raw_dir'], os.path.basename(task['output_path']))
+                            if task['raw_dir'] else None)
                 update_entry(manifest, slide_base,
                              state='validated', attempts=attempts,
                              current_image=task['output_path'],
