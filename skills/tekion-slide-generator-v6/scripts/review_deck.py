@@ -874,7 +874,7 @@ def build_html(session_dir: str) -> str:
     return page
 
 
-def serve(session_dir: str, timeout: int) -> int:
+def serve(session_dir: str, timeout: int, open_browser: bool = True) -> int:
     """校正室をローカルサーバで開き、フィードバック受信までブロックする。
 
     - GET /                : 最新の manifest から HTML を毎回組み立てて返す
@@ -1045,8 +1045,11 @@ def serve(session_dir: str, timeout: int) -> int:
     print(f"🌐 校正室を開きます: {url}")
     print("   修正指示が送信されるとこのプロセスは終了し、指示が保存されます")
 
-    opener = "open" if sys.platform == "darwin" else "xdg-open"
-    subprocess.run([opener, url], check=False)
+    if open_browser:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.run([opener, url], check=False)
+    else:
+        print("   （--no-open 指定のため OS ブラウザは開いていません。上記 URL をエージェントの内蔵ブラウザで開いてください）")
 
     timer = threading.Timer(timeout, lambda: (print("⏰ タイムアウト（フィードバック未受信）"),
                                               httpd.shutdown()))
@@ -1073,12 +1076,14 @@ def main() -> int:
     ap.add_argument("--serve", action="store_true",
                     help="ローカルサーバで開き、修正指示の送信まで待つ")
     ap.add_argument("--serve-timeout", type=int, default=3600, help="--serve の待ち上限秒")
+    ap.add_argument("--no-open", action="store_true",
+                    help="OS ブラウザを自動で開かない（エージェントの内蔵ブラウザで開く場合用）")
     ap.add_argument("--output", help="静的モードの出力先（デフォルト: <session-dir>/review.html）")
     ap.add_argument("--open", action="store_true", help="静的モードで生成後にブラウザで開く")
     args = ap.parse_args()
 
     if args.serve:
-        return serve(args.session_dir, args.serve_timeout)
+        return serve(args.session_dir, args.serve_timeout, open_browser=not args.no_open)
 
     out_path = args.output or os.path.join(args.session_dir, "review.html")
     with open(out_path, "w", encoding="utf-8") as f:
