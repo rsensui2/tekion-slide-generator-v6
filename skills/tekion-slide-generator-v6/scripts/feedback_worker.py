@@ -94,6 +94,21 @@ def build_jobs(session_dir: str, payload: dict) -> list[dict]:
     manifest = load_manifest(os.path.join(session_dir, "manifest.json"))
     known = set(manifest.get("slides", {}))
 
+    def _has_prompt(base: str) -> bool:
+        entry = manifest["slides"].get(base) or {}
+        pf = entry.get("prompt_file")
+        if pf and os.path.exists(pf):
+            return True
+        return os.path.exists(os.path.join(session_dir, "prompts", f"{base}.txt"))
+
+    def _mode_rebuild(base: str, want_rebuild: bool) -> bool:
+        # 取り込みスライドには生成プロンプトが無く、「作り直し」は指示文だけからの
+        # 生成になって元デザインが失われる → 参照つき微修正へ自動フォールバック
+        if want_rebuild and not _has_prompt(base):
+            print(f"ℹ️  {base}: プロンプトが無い（取り込みスライド）ため微修正モードで処理")
+            return False
+        return want_rebuild
+
     jobs = []
     covered = set()
     for base, text in fb.items():
@@ -108,10 +123,9 @@ def build_jobs(session_dir: str, payload: dict) -> list[dict]:
             names = ", ".join(os.path.basename(a) for a in att[1:])
             instruction += (f"\n（参照画像のほか、ユーザーは {names} も添付している。"
                             "指示文でそれらに言及があれば考慮すること）")
+        want_rebuild = (base in rebuild) or (bool(global_note) and not global_keepref)
         jobs.append({"base": base, "instruction": instruction,
-                     # 全体指示が「参照なし」なら、個別指示つきスライドも作り直しにする
-                     "rebuild": (base in rebuild)
-                     or (bool(global_note) and not global_keepref),
+                     "rebuild": _mode_rebuild(base, want_rebuild),
                      "reference": att[0] if att else None})
         covered.add(base)
 
@@ -120,7 +134,7 @@ def build_jobs(session_dir: str, payload: dict) -> list[dict]:
             if base in covered:
                 continue
             jobs.append({"base": base, "instruction": global_note,
-                         "rebuild": not global_keepref,
+                         "rebuild": _mode_rebuild(base, not global_keepref),
                          "reference": None})
     return jobs
 

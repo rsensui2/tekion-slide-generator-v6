@@ -65,10 +65,20 @@ VERSION="$(
     "${SKILL_DIR}/../../.codex-plugin/plugin.json" 2>/dev/null || echo "6.0.0"
 )"
 
+# launchd の環境は PATH が最小限で、ワーカーの子プロセスが `codex` を見つけられない。
+# インストール時点の codex / python の場所を PATH として焼き込む
+CODEX_BIN="$(command -v codex || true)"
+PATH_BAKED="$(dirname -- "$PYTHON_BIN")"
+if [[ -n "$CODEX_BIN" ]]; then
+  PATH_BAKED="$(dirname -- "$CODEX_BIN"):${PATH_BAKED}"
+fi
+PATH_BAKED="${PATH_BAKED}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 TMP_PLIST="$(mktemp "${TMPDIR:-/tmp}/tekion-hub.XXXXXX.plist")"
 trap 'rm -f -- "$TMP_PLIST"' EXIT
 sed \
   -e "s|__LABEL__|${LABEL}|g" \
+  -e "s|__PATH__|${PATH_BAKED}|g" \
   -e "s|__PYTHON__|${PYTHON_BIN}|g" \
   -e "s|__HUB_SERVER__|${RUNTIME_DIR}/hub_server.py|g" \
   -e "s|__TEKION_HOME__|${TEKION_HOME}|g" \

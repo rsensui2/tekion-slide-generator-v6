@@ -12,6 +12,8 @@
   </array>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
     <key>TEKION_SLIDES_HOME</key>
     <string>__TEKION_HOME__</string>
     <key>TEKION_DASHBOARD_PORT</key>
