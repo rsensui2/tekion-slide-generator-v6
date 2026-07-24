@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Setup (TEKION Slides)"
+  short_description: "自社ブランドのデザインプリセットを対話形式で登録・調整する"
+  default_prompt: "Use $design-setup to onboard my company's brand for TEKION Slide Generator: interpret my logo / PowerPoint master / brand screenshots, then create a preset that future decks apply automatically."

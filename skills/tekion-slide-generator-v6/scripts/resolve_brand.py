@@ -23,7 +23,25 @@ import sys
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
-PRESETS_DIR = SKILL_DIR / "references" / "presets"
+
+
+def _resolve_presets_dir() -> Path:
+    """プリセット置き場: 環境変数 → ユーザーホーム → スキル内（後方互換）の順。
+
+    プラグイン更新でスキルフォルダは丸ごと入れ替わるため、ユーザーのブランド設定は
+    ~/.tekion-slides/presets に置くのが正。スキル内は同梱テンプレートの置き場。
+    """
+    import os as _os
+    env = _os.environ.get("TEKION_PRESETS_DIR")
+    if env:
+        return Path(env).expanduser()
+    user_dir = Path.home() / ".tekion-slides" / "presets"
+    if user_dir.is_dir():
+        return user_dir
+    return SKILL_DIR / "references" / "presets"
+
+
+PRESETS_DIR = _resolve_presets_dir()
 DEFAULT_LOGO = SKILL_DIR / "assets" / "logo.png"
 VALID_POSITIONS = ("bottom-right", "bottom-left", "top-right", "top-left")
 

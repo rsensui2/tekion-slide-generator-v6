@@ -338,6 +338,24 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     .ph-frame, .stage-hero .pulse { animation: none; }
   }
 
+  /* オンボーディング（スタート画面下部） */
+  .onboard { max-width: 900px; margin: 36px auto 0; text-align: left; }
+  .onboard .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .onboard .step { background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+                   padding: 18px 20px; }
+  .onboard .step .n { display: inline-flex; align-items: center; justify-content: center;
+                      width: 26px; height: 26px; border-radius: 50%;
+                      background: var(--blue); color: #fff; font-size: 13px; font-weight: 700;
+                      margin-bottom: 10px; }
+  .onboard .step h3 { margin: 0 0 6px; font-size: 14.5px; }
+  .onboard .step p { margin: 0; font-size: 12.5px; color: var(--sub); line-height: 1.8; }
+  .onboard .step p b { color: var(--ink); }
+  .brandhint { margin: 18px auto 0; padding: 16px 20px;
+               background: var(--blue-tint); border: 1px solid #c7d9f5; border-radius: 12px;
+               font-size: 13px; color: var(--ink); line-height: 1.9; }
+  .brandhint b { color: var(--blue); }
+  @media (max-width: 760px) { .onboard .steps { grid-template-columns: 1fr; } }
+
   /* Ryoko バナーボタン（スタート画面・横並び） */
   .choices.banner { grid-template-columns: 1fr 1fr; gap: 20px; max-width: 900px; margin: 0 auto; }
   @media (max-width: 760px) { .choices.banner { grid-template-columns: 1fr; } }
@@ -911,6 +929,20 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
           <img src="{btn_create}" alt="新しく作る"></button>
       </div>
       <p class="create-hint" id="create-hint" hidden>✨ Cursor / Claude に「◯◯のスライドを作って」と指示してください。<br>生成が始まると、ここに実況が流れます。</p>
+      <section class="onboard">
+        <div class="steps">
+          <div class="step"><span class="n">1</span><h3>作る / 読み込む</h3>
+            <p>エージェント（Claude / Codex）に<br><b>「◯◯のスライドを作って」</b>と話しかける。<br>既存デッキはこの画面にドロップ。</p></div>
+          <div class="step"><span class="n">2</span><h3>赤入れで直す</h3>
+            <p>気になるスライドの<b>赤い記入欄</b>に修正指示を書いて <b>⏎</b>。<br>AIが該当スライドだけ描き直し、<br>版を並べて比較・選択できる。</p></div>
+          <div class="step"><span class="n">3</span><h3>持っていく</h3>
+            <p>右上の <b>⤓ PPTX / ⤓ PDF</b> でダウンロード。<br>選択中の確定版で書き出される。</p></div>
+        </div>
+        <p class="brandhint">🎨 <b>自社のデザインにしたい？</b> エージェントに<b>「デザインを設定したい」</b>と言うと、
+ロゴ・パワポのマスター・既存資料のスクショなどを渡すだけで、対話形式で自社プリセットを作成できます。
+一度作れば、次回から「スライドを作って」だけで自社デザインが自動適用されます。
+調整も「ロゴを左下に」「メインカラーを変えて」と言うだけ。</p>
+      </section>
     </section>"""
         else:
             landing = """    <section class="landing">
@@ -922,6 +954,20 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
         <div class="choice passive"><span class="big">✨</span>新しく作る
           <small>Cursor / Claude にそのまま指示してください。<br>生成が始まると、ここに実況が流れます</small></div>
       </div>
+      <section class="onboard">
+        <div class="steps">
+          <div class="step"><span class="n">1</span><h3>作る / 読み込む</h3>
+            <p>エージェント（Claude / Codex）に<br><b>「◯◯のスライドを作って」</b>と話しかける。<br>既存デッキはこの画面にドロップ。</p></div>
+          <div class="step"><span class="n">2</span><h3>赤入れで直す</h3>
+            <p>気になるスライドの<b>赤い記入欄</b>に修正指示を書いて <b>⏎</b>。<br>AIが該当スライドだけ描き直し、<br>版を並べて比較・選択できる。</p></div>
+          <div class="step"><span class="n">3</span><h3>持っていく</h3>
+            <p>右上の <b>⤓ PPTX / ⤓ PDF</b> でダウンロード。<br>選択中の確定版で書き出される。</p></div>
+        </div>
+        <p class="brandhint">🎨 <b>自社のデザインにしたい？</b> エージェントに<b>「デザインを設定したい」</b>と言うと、
+ロゴ・パワポのマスター・既存資料のスクショなどを渡すだけで、対話形式で自社プリセットを作成できます。
+一度作れば、次回から「スライドを作って」だけで自社デザインが自動適用されます。
+調整も「ロゴを左下に」「メインカラーを変えて」と言うだけ。</p>
+      </section>
     </section>"""
 
     session_name = os.path.basename(os.path.abspath(session_dir))

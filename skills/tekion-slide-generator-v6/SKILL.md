@@ -142,10 +142,12 @@ echo '{"stage":"planning","detail":"デザインとスライド構成を執筆�
 **プリセット使用時**（`design-setup` スキルで設定済みの場合）はコピーで済ませる:
 
 ```bash
-ACTIVE_PRESET_FILE="${SKILL_DIR}/references/presets/.active_preset"
-if [ -f "${ACTIVE_PRESET_FILE}" ]; then
-  PRESET_NAME=$(cat "${ACTIVE_PRESET_FILE}")
-  PRESET_PATH="${SKILL_DIR}/references/presets/${PRESET_NAME}"
+# プリセットはユーザーホーム優先（プラグイン更新で消えない場所）。無ければスキル同梱を使う
+PRESETS_DIR="${TEKION_PRESETS_DIR:-$HOME/.tekion-slides/presets}"
+[ -d "${PRESETS_DIR}" ] || PRESETS_DIR="${SKILL_DIR}/references/presets"
+if [ -f "${PRESETS_DIR}/.active_preset" ]; then
+  PRESET_NAME=$(cat "${PRESETS_DIR}/.active_preset")
+  PRESET_PATH="${PRESETS_DIR}/${PRESET_NAME}"
   [ -f "${PRESET_PATH}" ] || PRESET_PATH="${SKILL_DIR}/references/presets/example-preset.md"
 else
   PRESET_PATH="${SKILL_DIR}/references/presets/example-preset.md"
@@ -202,9 +204,10 @@ ${PYTHON} "${SKILL_DIR}/scripts/validate_slides_json.py" --file "${SESSION_DIR}/
 ## Phase 4: プロンプト生成
 
 ```bash
-ACTIVE_STYLE_FILE="${SKILL_DIR}/references/presets/.active_style"
-if [ -f "${ACTIVE_STYLE_FILE}" ]; then
-  STYLE=$(cat "${ACTIVE_STYLE_FILE}")
+PRESETS_DIR="${TEKION_PRESETS_DIR:-$HOME/.tekion-slides/presets}"
+[ -d "${PRESETS_DIR}" ] || PRESETS_DIR="${SKILL_DIR}/references/presets"
+if [ -f "${PRESETS_DIR}/.active_style" ]; then
+  STYLE=$(cat "${PRESETS_DIR}/.active_style")
   [ -z "${STYLE}" ] && STYLE=balanced
 else
   STYLE=balanced
