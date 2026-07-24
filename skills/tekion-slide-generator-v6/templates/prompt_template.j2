@@ -1,0 +1,119 @@
+{#
+nano-banana Slide Generator v3 Flash - Jinja2 Prompt Template
+
+- ペルソナ設定による一貫したデザイン品質
+- YAML形式の明確な制約定義
+- デザイン指示文が画像内に描画されることの防止
+- チャプターコンテキストによるスライド間の一貫性
+- 汎用化: デザインガイドラインの配色に従う（ハードコード色なし）
+- v3 Flash: 解像度動的化、Gemini 3.1 Flash Image Preview対応
+#}
+あなたはプレゼンテーションスライドのデザイナーです。
+以下の指示に基づき、視覚的にリッチで情報が網羅された講義資料スライド画像を1枚生成してください。
+
+---
+
+constraints:
+  allowed_text_in_image:
+    - "[Content Data]に含まれるタイトル、サブタイトル、本文テキスト"
+    - "フッターテキスト"
+  forbidden_text_in_image:
+    - "デザイン指示文（カラーコード、Pattern名、書体指定など）"
+    - "カラーコード文字列は色として適用するが文字として描画しない"
+    - "書体名・フォント名"
+    - "Design Guidelinesセクションの説明文"
+    - "スライドポジション情報（例: 3/8）や章構成のアウトライン"
+  visual_richness:
+    - "文字だけのスライドは禁止"
+    - "図解、アイコン、レイアウトの工夫を必ず含める"
+    - "テキストはカード、ボックス、フロー等の図形内に配置"
+  information_completeness:
+    - "図解化しても内容を削除しない"
+    - "すべての詳細を図中または補足テキストとして記載"
+
+---
+
+{% if chapter_context %}
+[Chapter Context]
+chapter_title: "{{ chapter_context.chapter_title }}"
+slide_position: "{{ chapter_context.slide_position }}"
+outline:
+{% for item in chapter_context.outline %}
+  - "{{ item }}"
+{% endfor %}
+note: "この情報はスライド間の一貫性を保つための参考情報であり、画像内には描画しない"
+
+---
+
+{% endif %}
+[Design Guidelines]
+{{ design_guidelines }}
+
+---
+
+[Content Data]
+title: "{{ slide.title }}"
+{% if slide.subtitle %}
+subtitle: "{{ slide.subtitle }}"
+{% endif %}
+{% if slide.key_message %}
+key_message: "{{ slide.key_message }}"
+{% endif %}
+content: |
+  {{ slide.content }}
+
+---
+
+output_spec:
+  aspect_ratio: "16:9"
+  resolution: "{{ resolution | default('2560x1440') }}"
+  font_size: "見出しと本文で十分な差をつけ、テキスト階層を明確にする"
+  margin: "全辺5%"
+  footer_position: "右下に小さく表示"
+
+{% if "講座タイトルスライド（表紙）" in slide.content %}
+design:
+  layout: "Pattern M（講座タイトル）"
+  structure: "3層 - 講座名（大）、組織名（中）、回次/テーマ（小）"
+  background: "Design Guidelinesの配色パレットに従う。白ベース + アクセントカラーの幾何学ライン"
+  alignment: "中央配置"
+{% elif "中扉スライド：タイトルとサブタイトルのみ表示" in slide.content %}
+design:
+  layout: "Pattern L（中扉）"
+  structure: "タイトルとサブタイトルのみ、画面中央に大きく配置"
+  background: "Design Guidelinesのアクセントカラーによるグラデーション"
+  purpose: "セクション区切り、視覚的インパクト重視"
+{% else %}
+design:
+  layout_selection: "Design GuidelinesのPattern A-Kと図解パターンガイドから最適な組み合わせを選択"
+  mapping:
+    比較・対比: "Pattern A (ビフォーアフター、項目比較図)"
+    手順・フロー: "Pattern B (フロー図横型/縦型、サイクル図、階段ステップ図)"
+    リスト・複数項目: "Pattern C (グループ図少、マトリクス、ハニカム), H (グループ図多)"
+    強調・数字: "Pattern D (数式、規模比較図、トライアングル)"
+    構造・階層: "Pattern E (ツリー図、ピラミッド図、放射図、レイヤー図、TAM-SAM-SOM)"
+    抽象概念・メタファー: "Pattern F, K (相関図、ベン図、地図マップ)"
+    インパクト重視: "Pattern G"
+    時系列: "Pattern I"
+    データ・統計: "Pattern J (規模比較図)"
+  visual_elements: "アイコン、イラスト、図形、矢印を積極的に使用。図解パターンガイドの視覚的特徴を参照"
+  color_usage: "Design Guidelinesの配色パレットに従う"
+{% endif %}
+
+logo:
+  instruction: "添付されたロゴ画像を、ピクセル単位で忠実に、そのまま配置すること。ロゴは再描画・再着色・トレース・スタイル変更を一切行わず、提供された画像をそのまま貼り付けるイメージで扱う"
+  position: "画面右下角から5%マージンの位置。ロゴの高さはスライド全高の約5-7%、横幅はスライド幅の最大10%程度"
+  clean_area: "ロゴを配置するエリア（スライドの右下1/6領域）は白または極めて薄い無地の背景にし、ロゴ周辺に十分な余白を確保する。このエリアに背景装飾・グラデーション・濃色帯・斜めライン・イラスト等を重ねない"
+  as_is: "ロゴの色・形・文字の書体・太さ・比率は、提供されたロゴ画像と完全に同じにする。モデルが想像で色や形を変えることは禁止。添付画像を貼り付けて縮小するだけで良い"
+  no_fabrication: "提供されていないブランド名・ロゴを想像で追加してはいけない。添付されたロゴ画像のみを使用"
+
+forbidden:
+  - "ウォーターマーク（NotebookLM、Google等）"
+  - "文字だけの単調なスライド"
+  - "配色パレットに定義されていないカラー"
+  - "デザイン指示文やカラーコード文字列の画像内描画"
+  - "書体名・フォント名の画像内描画"
+  - "ロゴの想像による生成"
+  - "スライドポジション情報や章構成アウトラインの画像内描画"
+  - "ロゴ配置エリア（右下）への装飾的背景・グラデーション・濃色・イラスト・街シルエット等の重ね配置"
+  - "ロゴの色反転・色置換・白抜き（元画像の配色から変更すること）"

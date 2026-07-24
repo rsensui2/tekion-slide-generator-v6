@@ -1,0 +1,44 @@
+{
+  "name": "tekion-slide-generator",
+  "version": "6.0.0",
+  "description": "Generate Japanese 16:9 slide decks from Markdown/text, review and fix them in a browser proofing room, and export PPTX/PDF. Imports existing PPTX/PDF decks for revision. Images render on Codex's built-in gpt-image-2 (ChatGPT subscription, no API key).",
+  "author": {
+    "name": "TEKION Group"
+  },
+  "keywords": [
+    "presentations",
+    "slides",
+    "image-generation",
+    "pptx",
+    "pdf",
+    "japanese",
+    "proofing"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "TEKION Slide Generator",
+    "shortDescription": "日本語スライド生成 + ブラウザ校正室（赤入れ・差分編集・取り込み改修）",
+    "longDescription": "TEKION Slide Generator v6 は、Markdown/テキストから日本語の 16:9 スライドデッキを生成し、ブラウザの「校正室」でレビューするワークフローを提供します。枚数ぶんの一斉並列生成とレート制限時の自動減速、manifest + 検証スイープ + resume による『N枚頼んだらN枚返る』ゼロ欠損保証、スライド単位の赤入れ→ワンクリック修正依頼、バージョン比較（選択=確定）、既存 PPTX/PDF のドラッグ&ドロップ取り込み改修、PPTX/PDF ダウンロードまで1画面で完結。画像生成は Codex 内蔵 gpt-image-2 を使うため、ChatGPT サブスクリプションがあれば API キー不要です。",
+    "developerName": "TEKION Group",
+    "category": "Productivity",
+    "logo": "./skills/tekion-slide-generator-v6/assets/logo.png",
+    "capabilities": [
+      "Markdown/テキストからの日本語スライド生成（16:9）",
+      "ブラウザ校正室（生成実況・赤入れ・ワンクリック修正依頼）",
+      "バージョン比較とワンクリック確定（選択=確定）",
+      "差分編集・赤ペン編集・ロールバック",
+      "既存 PPTX/PDF/画像の取り込み改修（ドラッグ&ドロップ）",
+      "manifest + 検証スイープ + resume のゼロ欠損保証",
+      "枚数ぶん一斉並列生成 + AIMD 自動減速",
+      "PPTX/PDF エクスポート（確定版のみ）",
+      "TEKION ブランド/ロゴ焼き込み",
+      "Codex サブスク枠の gpt-image-2（API キー不要）"
+    ],
+    "brandColor": "#104F9E",
+    "defaultPrompt": [
+      "このMarkdownからスライドを作って、校正室でレビューさせて。",
+      "既存のパワポ（PPTX/PDF）を取り込んで直したい。校正室を開いて。",
+      "この資料を12枚のピッチデッキにして。"
+    ]
+  }
+}

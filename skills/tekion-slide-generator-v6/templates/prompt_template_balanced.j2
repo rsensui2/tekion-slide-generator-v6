@@ -1,0 +1,142 @@
+{#
+TEKION Slide Generator v5 - Jinja2 Prompt Template (Balanced / 営業資料・提案書スタイル)
+
+- Pitch.com / MorningBrew / Figma Slides のような洗練された営業資料
+- 見出し + 3-5項目の簡潔な箇条書き / 2-3ブロックの図解
+- ビジュアルとテキストのバランス 40-60%
+- 情報の網羅は求めず、要点を絞って伝える
+- v5 Balanced: 情報密度の強制を外し、余白とリズムを許容
+#}
+あなたはプレゼンテーションスライドのデザイナーです。
+以下の指示に基づき、洗練された営業資料・提案書スタイルの高品質な1枚スライドを生成してください。
+
+---
+
+style:
+  name: "Balanced"
+  philosophy: "Pitch.com / MorningBrew / Figma Slides のような洗練されたビジネススライド"
+  text_volume: "見出し + 3-5項目の簡潔な箇条書き、または2-3ブロックの図解"
+  visual_ratio: "テキスト40-60% / ビジュアル40-60%のバランス"
+  layout: "2-3要素のグリッド、明確な階層、適度な余白"
+  tone: "プロフェッショナルで信頼感のある、営業・提案の場面に適した品格"
+
+constraints:
+  allowed_text_in_image:
+    - "[Content Data]に含まれるタイトル、サブタイトル、本文テキスト"
+    - "フッターテキスト"
+  forbidden_text_in_image:
+    - "デザイン指示文（カラーコード、Pattern名、書体指定など）"
+    - "カラーコード文字列は色として適用するが文字として描画しない"
+    - "書体名・フォント名"
+    - "Design Guidelinesセクションの説明文"
+    - "スライドポジション情報（例: 3/8）や章構成のアウトライン"
+  editorial_discipline:
+    - "情報をすべて詰め込むのではなく、核となる要点に絞る"
+    - "箇条書きは最大5項目まで、それ以上は図解化するかカットする"
+    - "1スライドに伝えたいメッセージは1つに集中させる"
+  visual_quality:
+    - "図解・アイコン・イラスト・写真のいずれかを取り入れる（文字だけにしない）"
+    - "カード・ボックスは必要に応じて使用（強制ではない）"
+    - "余白を恐れず、読みやすさを優先"
+
+---
+
+{% if chapter_context %}
+[Chapter Context]
+chapter_title: "{{ chapter_context.chapter_title }}"
+slide_position: "{{ chapter_context.slide_position }}"
+outline:
+{% for item in chapter_context.outline %}
+  - "{{ item }}"
+{% endfor %}
+note: "この情報はスライド間の一貫性を保つための参考情報であり、画像内には描画しない"
+
+---
+
+{% endif %}
+[Design Guidelines]
+{{ design_guidelines }}
+
+---
+
+[Content Data]
+title: "{{ slide.title }}"
+{% if slide.subtitle %}
+subtitle: "{{ slide.subtitle }}"
+{% endif %}
+{% if slide.key_message %}
+key_message: "{{ slide.key_message }}"
+{% endif %}
+{% if slide.display_copy %}
+display_copy: |
+  {{ slide.display_copy | indent(2) }}
+{% if slide.visual_brief %}
+visual_brief: |
+  {{ slide.visual_brief | indent(2) }}
+{% endif %}
+{% if slide.layout_hint %}
+layout_hint: "{{ slide.layout_hint }}"
+{% endif %}
+content_discipline: |
+  - display_copy はスライドに描画する文字そのものである。全行を欠落・重複・要約なしにそのまま描画すること
+  - visual_brief と layout_hint は「描画してはならない指示」である。指示の文言を画像に描かないこと
+{% else %}
+content: |
+  {{ slide.content }}
+{% endif %}
+
+---
+
+output_spec:
+  aspect_ratio: "16:9"
+  resolution: "{{ resolution | default('2560x1440') }}"
+  font_size: "見出しと本文で明確な階層を作る。見出しは大きく、本文は読みやすく"
+  margin: "全辺5%、要素間も適切な余白"
+  footer_position: "右下に小さく表示"
+
+{% set content_all = (slide.content | default('')) ~ ' ' ~ (slide.display_copy | default('')) ~ ' ' ~ (slide.visual_brief | default('')) ~ ' ' ~ (slide.layout_hint | default('')) %}
+{% if "講座タイトルスライド（表紙）" in content_all %}
+design:
+  layout: "表紙レイアウト"
+  structure: "タイトル（大）、サブタイトル（中）、補足（小）の3層"
+  background: "Design Guidelinesの配色に従う。白ベース + アクセントカラーの装飾ライン"
+  alignment: "中央配置またはやや左寄せ、プロフェッショナルな印象"
+{% elif "中扉スライド" in content_all %}
+design:
+  layout: "中扉"
+  structure: "タイトルとサブタイトルを中央に大きく、シンプルに"
+  background: "Design Guidelinesのアクセントカラーを活かす"
+  purpose: "セクション区切り、視覚的一体感"
+{% else %}
+design:
+  layout_approach: "コンテンツ内容に応じて最適な構成を選択。Design Guidelines の Pattern A-K を参考に、1-3個の主要要素で構成"
+  selection_hints:
+    比較・対比: "左右スプリット"
+    手順・フロー: "横または縦のフロー図（3-5ステップ程度）"
+    リスト・並列項目: "2-3列のカードまたは箇条書き"
+    強調・数字: "大きな数字＋ラベル、1-3個までに絞る"
+    構造・階層: "ツリー・ピラミッド・階層図（簡潔に）"
+    プロフィール・人物: "左右スプリット（写真+テキスト）"
+    時系列: "タイムライン"
+  visual_elements: "アイコン・イラスト・写真・矢印を適度に使用。詰め込みすぎない"
+  color_usage: "Design Guidelines の配色パレットに従う。1スライドあたり3色以内"
+  whitespace: "余白をしっかり取り、情報を呼吸させる"
+{% endif %}
+
+logo:
+  instruction: "添付されたロゴ画像を、ピクセル単位で忠実に、そのまま配置すること。ロゴは再描画・再着色・トレース・スタイル変更を一切行わず、提供された画像をそのまま貼り付けるイメージで扱う"
+  position: "画面右下角から5%マージンの位置。ロゴの高さはスライド全高の約5-7%、横幅はスライド幅の最大10%程度"
+  clean_area: "ロゴを配置するエリア（スライドの右下1/6領域）は白または極めて薄い無地の背景にし、ロゴ周辺に十分な余白を確保する。このエリアに背景装飾・グラデーション・濃色帯・斜めライン・イラスト等を重ねない"
+  as_is: "ロゴの色・形・文字の書体・太さ・比率は、提供されたロゴ画像と完全に同じにする。モデルが想像で色や形を変えることは禁止。添付画像を貼り付けて縮小するだけで良い"
+  no_fabrication: "提供されていないブランド名・ロゴを想像で追加してはいけない。添付されたロゴ画像のみを使用"
+
+forbidden:
+  - "ウォーターマーク（NotebookLM、Google等）"
+  - "配色パレットに定義されていないカラー"
+  - "デザイン指示文やカラーコード文字列の画像内描画"
+  - "書体名・フォント名の画像内描画"
+  - "ロゴの想像による生成"
+  - "スライドポジション情報や章構成アウトラインの画像内描画"
+  - "ロゴ配置エリア（右下）への装飾的背景・グラデーション・濃色・イラスト等の重ね配置"
+  - "ロゴの色反転・色置換・白抜き（元画像の配色から変更すること）"
+  - "情報の詰め込みすぎ（1スライドに7項目以上の箇条書きや4枚以上のカードは避ける）"

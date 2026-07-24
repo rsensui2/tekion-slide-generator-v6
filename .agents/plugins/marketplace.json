@@ -1,0 +1,20 @@
+{
+  "name": "tekion-slide-generator",
+  "interface": {
+    "displayName": "TEKION Slide Generator"
+  },
+  "plugins": [
+    {
+      "name": "tekion-slide-generator",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

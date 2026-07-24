@@ -1,0 +1,148 @@
+{#
+TEKION Slide Generator v5 - Jinja2 Prompt Template (Visual / ピッチデッキスタイル)
+
+- Apple Keynote / TED Talk / Dieter Rams の余白美学
+- 文字は極限まで少なく（タイトル+キーメッセージ1文）
+- 画面の60-80%を1つの大胆なビジュアル（写真・巨大数字・シンボル・イラスト）
+- 1スライド1メッセージ、大胆な余白
+- フルブリード（画面いっぱい）の写真・イラスト・背景を推奨
+- v5 Visual: テキスト過剰と情報網羅を明示的に禁止
+#}
+あなたは世界最高レベルのプレゼンテーションデザイナーです。
+Apple Keynote や TED Talk のような、極限まで洗練されたピッチデッキを1枚生成してください。
+
+---
+
+style:
+  name: "Visual"
+  philosophy: "Apple Keynote / TED Talk / Dieter Rams の余白美学。Less is more."
+  text_volume: "極限まで少なく。タイトル15文字以内 + キーメッセージ1文（最大2行）。それ以外のテキストは原則なし"
+  visual_dominance: "画面の60-80%を1つの大胆なビジュアル（全面写真・巨大数字・大きなシンボル・印象的なイラスト）が占める"
+  layout: "大胆な余白、中央集中または黄金比の片寄せ。1スライド1メッセージ"
+  emotional_impact: "見た瞬間に1つのメッセージが伝わる。読ませるのではなく、感じさせる"
+
+constraints:
+  allowed_text_in_image:
+    - "[Content Data]のタイトル（短縮可、15文字以内）"
+    - "[Content Data]のkey_messageまたは核となる1文"
+    - "数字・単位（例: 200名+、75%、40万円）"
+    - "固有名詞・ブランド名"
+  forbidden_text_in_image:
+    - "本文の全文再現（contentに書かれていても、必要な核だけ抽出）"
+    - "複数の箇条書き（3項目以上の並列リストは禁止）"
+    - "複数のカード・ボックスに情報を並列配置"
+    - "詳細な説明文・補足・注釈の複数行表示"
+    - "デザイン指示文・カラーコード・書体名"
+    - "スライドポジション情報・章構成アウトライン"
+  visual_requirements:
+    - "画面の主役は1つのビジュアル要素（写真・巨大数字・アイコン・イラスト・シンボル）"
+    - "フルブリード（端から端まで）の写真・グラデーション・イラストを積極的に使用"
+    - "余白を恐れない。画面の30%以上を意図的に空白にして良い"
+    - "テキストは呼吸する余白の中に配置する"
+
+---
+
+{% if chapter_context %}
+[Chapter Context]
+chapter_title: "{{ chapter_context.chapter_title }}"
+slide_position: "{{ chapter_context.slide_position }}"
+note: "この情報は参考用であり、画像内に描画しない"
+
+---
+
+{% endif %}
+[Design Guidelines]
+{{ design_guidelines }}
+
+---
+
+[Content Data]
+title: "{{ slide.title }}"
+{% if slide.subtitle %}
+subtitle: "{{ slide.subtitle }}"
+{% endif %}
+{% if slide.key_message %}
+key_message: "{{ slide.key_message }}"
+{% endif %}
+{% if slide.display_copy %}
+display_copy: |
+  {{ slide.display_copy | indent(2) }}
+{% if slide.visual_brief %}
+visual_brief: |
+  {{ slide.visual_brief | indent(2) }}
+{% endif %}
+{% if slide.layout_hint %}
+layout_hint: "{{ slide.layout_hint }}"
+{% endif %}
+content_discipline: |
+  - display_copy はスライドに描画する文字そのものである（Visualスタイルでは元々文字が少ないはず）
+  - visual_brief と layout_hint は「描画してはならない指示」である。指示の文言を画像に描かないこと
+{% else %}
+content: |
+  {{ slide.content }}
+{% endif %}
+
+important_note_about_content: |
+  上記の内容に詳細な図解指示・箇条書きが含まれていても、
+  Visualスタイルでは**その通りに全部描画しないこと**。
+  核となる1メッセージ・核となる1ビジュアル要素のみを抽出し、
+  余白を活かした大胆な構成で表現すること。
+  詳細な図解・複数カード・網羅的な箇条書きは **Visualスタイルでは禁止**。
+
+---
+
+output_spec:
+  aspect_ratio: "16:9"
+  resolution: "{{ resolution | default('2560x1440') }}"
+  font_size: "タイトルは極大（スライド高さの10-15%）。本文テキストがある場合は小さめで余白の中に"
+  margin: "全辺に大胆な余白（10-15%）。要素を画面中央付近に集中配置"
+  footer_position: "右下に極小（目立たせない）"
+
+design_direction:
+{% set content_all = (slide.content | default('')) ~ ' ' ~ (slide.display_copy | default('')) ~ ' ' ~ (slide.visual_brief | default('')) ~ ' ' ~ (slide.layout_hint | default('')) %}
+{% if "講座タイトルスライド（表紙）" in content_all %}
+  layout: "フルブリード表紙"
+  composition: "極大タイトル（画面の30-50%）+ サブタイトル1行のみ。背景は大胆な全面写真またはグラデーション"
+  text_placement: "中央または黄金比の片寄せ"
+  background: "Design Guidelinesの配色で、ドラマチックな印象"
+{% elif "中扉スライド" in content_all %}
+  layout: "ミニマル中扉"
+  composition: "タイトルのみを画面中央に極大表示。装飾は最小限"
+  background: "アクセントカラーのグラデーションまたは純粋な無地"
+{% else %}
+  layout_approach: "contentの核を1つに絞り、以下のパターンから最適なものを選ぶ"
+  visual_patterns:
+    - "フルブリード写真 + 中央にキャッチコピー1行"
+    - "巨大数字（画面の30-40%）+ 短いラベル"
+    - "大きなシンボル/アイコン（画面の20-30%）+ タイトル+1文"
+    - "左右分割: 左に大きな写真、右に短い見出し+1-2行のみ"
+    - "印象的なイラストまたはメタファー画像 + タイトル"
+  what_to_cut:
+    - "contentに書かれた複数項目の箇条書き → 最も重要な1点に絞る"
+    - "図解の詳細指示（Pattern X、カード構造等） → 無視して、代わりに1つのビジュアル要素を大胆に"
+    - "補足説明・注釈 → カット or 極小フッターに"
+  encouraged:
+    - "アイコン・写真・イラストを大きく1点配置"
+    - "タイポグラフィ自体をビジュアルとして活用（極大・極太・コントラスト）"
+    - "余白と間の美学"
+{% endif %}
+
+logo:
+  instruction: "添付されたロゴ画像を、ピクセル単位で忠実に、そのまま配置すること。ロゴは再描画・再着色・トレース・スタイル変更を一切行わず、提供された画像をそのまま貼り付けるイメージで扱う"
+  position: "画面右下角から5%マージン、極小（スライド高さの4-5%）で目立たせない"
+  clean_area: "ロゴを配置する右下エリアは白または極薄無地の背景を確保。このエリアに装飾・グラデーション・濃色・イラストを重ねない"
+  as_is: "ロゴの色・形・文字の書体・比率は、提供画像と完全に同じにする。想像で変えることは禁止"
+  no_fabrication: "提供されていないブランド名・ロゴを想像で追加しない"
+
+forbidden:
+  - "ウォーターマーク（NotebookLM、Google等）"
+  - "4項目以上の並列リスト・箇条書き"
+  - "3枚以上の並列カード/ボックス"
+  - "詳細な説明文の複数行表示"
+  - "配色パレットに定義されていないカラー"
+  - "デザイン指示文・カラーコード・書体名の画像内描画"
+  - "ロゴの想像による生成・色変更"
+  - "スライドポジション情報や章構成アウトラインの画像内描画"
+  - "ロゴ配置エリア（右下）への装飾重ね配置"
+  - "情報の網羅（content全文の再現）"
+  - "画面全体にテキストを敷き詰めること"
