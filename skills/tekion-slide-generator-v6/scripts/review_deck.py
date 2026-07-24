@@ -259,6 +259,24 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .viewing-label { font-size: 12px; color: var(--sub); font-weight: 600; margin-right: auto; }
   .viewing-label b { color: var(--orange-dark); }
 
+  /* プロンプトライブラリ: スライドを作った生成プロンプトの表示 */
+  .promptbox { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px;
+               background: #faf8f5; overflow: hidden; }
+  .promptbox .pbar { display: flex; align-items: center; justify-content: space-between;
+                     padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .promptbox .ptitle { font-family: "Space Grotesk", sans-serif;
+                       font-size: 10px; font-weight: 700; letter-spacing: .2em;
+                       text-transform: uppercase; color: var(--orange); }
+  .promptbox .pcopy { border: 1px solid var(--line); background: var(--paper);
+                      color: var(--sub); font-size: 11.5px; font-weight: 600;
+                      padding: 5px 14px; border-radius: 999px; cursor: pointer;
+                      font-family: inherit; transition: border-color .15s, color .15s; }
+  .promptbox .pcopy:hover { border-color: rgba(255,90,0,.45); color: var(--orange-dark); }
+  .promptbox pre { margin: 0; padding: 14px 16px; max-height: 320px; overflow: auto;
+                   font-family: "SF Mono", Menlo, "Hiragino Sans", monospace;
+                   font-size: 12px; line-height: 1.8; color: var(--sub);
+                   white-space: pre-wrap; word-break: break-word; }
+
   /* バージョンタイムライン: 縦の接続線で「派生」を可視化 */
   aside.vtree { position: relative; padding-left: 18px; }
   aside.vtree::before {
@@ -636,8 +654,8 @@ const SERVED = location.protocol.startsWith('http');
 if (!SERVED) {
   ['dl-pptx', 'dl-pdf'].forEach(id => document.getElementById(id).style.display = 'none');
   document.querySelectorAll('.slip .send').forEach(b => b.style.display = 'none');
-  // file:// では /home も並べ替え・削除の保存もできない
-  document.querySelectorAll('.headtools').forEach(t => t.style.display = 'none');
+  // file:// では /home も並べ替え・削除・プロンプト取得もできない
+  document.querySelectorAll('.headtools, .prompt-btn').forEach(t => t.style.display = 'none');
   document.querySelectorAll('.rail a[draggable]').forEach(a => a.removeAttribute('draggable'));
   const brand = document.getElementById('brand-link');
   if (brand) brand.removeAttribute('href');
@@ -904,6 +922,33 @@ function bindRailDrag() {
 }
 bindRailDrag();
 
+/* --- プロンプトライブラリ表示 --- */
+async function togglePrompt(btn) {
+  const c = card(btn);
+  const box = c.querySelector('.promptbox');
+  if (!box.hidden) { box.hidden = true; return; }
+  const pre = box.querySelector('pre');
+  box.hidden = false;
+  if (pre.dataset.loaded) return;
+  pre.textContent = '読み込み中…';
+  try {
+    const res = await fetch('/prompt?slide=' + encodeURIComponent(c.dataset.slide));
+    const r = await res.json();
+    if (!res.ok || !r.ok) throw new Error(r.error || ('HTTP ' + res.status));
+    pre.textContent = r.prompt;
+    pre.dataset.loaded = '1';
+  } catch (e) {
+    pre.textContent = 'プロンプトを取得できませんでした: ' + e.message;
+  }
+}
+function copyPrompt(btn) {
+  const pre = card(btn).querySelector('.promptbox pre');
+  navigator.clipboard.writeText(pre.textContent).then(() => {
+    btn.textContent = '✓ コピーしました';
+    setTimeout(() => { btn.textContent = 'コピー'; }, 1500);
+  }, () => alert('コピーに失敗しました'));
+}
+
 /* --- 削除（ソフトデリート + 元に戻す） --- */
 let undoPending = null;
 let undoTimer = null;
@@ -1066,7 +1111,13 @@ CARD_TEMPLATE = """    <article class="proof" id="p-__NAME__" data-slide="__NAME
           <img class="slide" src="__CUR_SRC__" alt="__NAME__" loading="lazy">
           <div class="tools">
             <span class="viewing-label">確定版: <b>__CUR_LABEL__</b></span>
+            <button class="tool prompt-btn" onclick="togglePrompt(this)">☰ プロンプト</button>
             <a class="tool dl" href="__CUR_ORIG__" download="__CUR_FILE__">⤓ PNG保存</a>
+          </div>
+          <div class="promptbox" hidden>
+            <div class="pbar"><span class="ptitle">Generation Prompt</span>
+              <button class="pcopy" onclick="copyPrompt(this)">コピー</button></div>
+            <pre></pre>
           </div>
         </div>
 __VTREE__
@@ -1442,6 +1493,34 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                 except Exception as e:
                     print(f"⚠️  thumb失敗: {e}")
                     self.send_error(500)
+                return
+            if self.path.startswith("/prompt?"):
+                # スライドの生成プロンプトを返す（プロンプトライブラリ表示用）
+                from urllib.parse import urlparse, parse_qs
+                base = (parse_qs(urlparse(self.path).query).get("slide") or [""])[0]
+                with manifest_lock:
+                    manifest = load_manifest(manifest_path)
+                entry = manifest.get("slides", {}).get(base)
+                if entry is None:
+                    self._respond_json({"ok": False, "error": f"unknown slide: {base}"}, 404)
+                    return
+                candidates = [entry.get("prompt_file") or "",
+                              os.path.join(session_dir, "prompts", f"{base}.txt")]
+                for p in candidates:
+                    if p and os.path.exists(p):
+                        try:
+                            with open(p, "r", encoding="utf-8") as f:
+                                text = f.read()
+                        except OSError as e:
+                            self._respond_json({"ok": False, "error": str(e)}, 500)
+                            return
+                        self._respond_json({"ok": True, "prompt": text,
+                                            "file": os.path.basename(p)})
+                        return
+                self._respond_json(
+                    {"ok": False,
+                     "error": "プロンプトファイルが見つかりません（取り込みスライドには生成プロンプトがありません）"},
+                    404)
                 return
             if self.path in ("/", "/review.html", "/home"):
                 kind = "home" if self.path == "/home" else "deck"
