@@ -39,7 +39,7 @@ Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF �
 ```bash
 # GitHub から（公開後）
 codex plugin marketplace add rsensui2/tekion-slide-generator
-codex plugin add tekion-slide-generator
+codex plugin add tekion-slide-generator@tekion-slide-generator
 
 # またはスキルを直接コピー
 cp -r skills/tekion-slide-generator-v6 ~/.codex/skills/
