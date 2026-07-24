@@ -2400,6 +2400,25 @@ def serve(session_dir: str, timeout: int, open_browser: bool = True,
     """
     handle = start_server(session_dir, timeout, open_browser, url_file=url_file,
                           exit_on_feedback=not persist)
+    if not persist:
+        # ユーザーが常駐ハブ（別プロセス）から送信した場合は自前サーバの POST が来ないため、
+        # slide_feedback.json の更新も監視して同じ「受信で終了」を成立させる
+        import time as _time
+        start_ts = _time.time()
+
+        def _watch_external():
+            while not handle.received.is_set():
+                try:
+                    if (os.path.exists(handle.feedback_path)
+                            and os.path.getmtime(handle.feedback_path) >= start_ts):
+                        handle.received.set()
+                        handle.httpd.shutdown()
+                        return
+                except OSError:
+                    pass
+                _time.sleep(2)
+
+        threading.Thread(target=_watch_external, daemon=True).start()
     handle.httpd.serve_forever()
     handle.timer.cancel()
     if persist:

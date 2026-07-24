@@ -124,12 +124,22 @@ curl -fsS "${DECK_URL}viewers"
 - `{"active": true}`: 既にユーザーが見ているため何も開かない
 - 同じタスク中は、生成・修正後も二度と開き直さない。表示中のタブが `/status` のポーリングで反映を拾う
 
-修正指示の待ち受けはサーバと独立したファイル監視で行う。Claude はバックグラウンド、
-Codex は前面で実行し、編集後は待ち受けだけを再起動する:
+修正指示の待ち受けはサーバと独立したファイル監視で行う:
 
 ```bash
+# Claude Code: バックグラウンドで長時間待てる
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
+
+# Codex: 前面の長時間ブロックはコマンド上限で殺されるため、短い待ちを繰り返す
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 300
 ```
+
+**Codex の待ち受けループ（重要）**: 上の 300 秒コマンドを前面実行し、
+- exit 0（受信）→ stdout の JSON を読んで Phase 8 の編集へ。編集後、また待ち受けに戻る
+- exit 2（タイムアウト）→ **同じコマンドをそのまま再実行**する。ユーザーが終了を告げるまで繰り返す
+- セッションを終えるときは「修正指示はダッシュボードから送れば保存されます。
+  次のチャットで『続きを』と言えば再開します」と必ず案内する（指示は slide_feedback.json に
+  永続化され、ハブに「未処理」バッジが出る）
 
 固定ハブ `http://127.0.0.1:7799/` のスタート画面では、ユーザーは2つの入り口を選べる:
 

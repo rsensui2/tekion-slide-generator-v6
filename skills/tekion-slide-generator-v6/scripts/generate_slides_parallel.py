@@ -352,12 +352,26 @@ def run_pass(tasks, args, retry_script, per_slide_timeout, gate, abort_event,
 
 
 def wait_for_review(dashboard, timeout: int) -> None:
-    """レビュー送信（または timeout）までブロックし、受信サマリーを表示する。"""
+    """レビュー送信（または timeout）までブロックし、受信サマリーを表示する。
+
+    ユーザーが常駐ハブ（別プロセス）から送信した場合は自前サーバの received が
+    立たないため、slide_feedback.json の更新もあわせて監視する。
+    """
     dashboard.timer.cancel()
     print(f"\n📊 レビュー待ち: {dashboard.url}")
     print("   ダッシュボードで赤入れして「修正を依頼する」を押すと、このコマンドが終了します")
+    start = time.time()
     try:
-        dashboard.received.wait(timeout=timeout)
+        while time.time() - start < timeout and not dashboard.received.is_set():
+            if dashboard.received.wait(timeout=2):
+                break
+            try:
+                if (os.path.exists(dashboard.feedback_path)
+                        and os.path.getmtime(dashboard.feedback_path) >= start):
+                    dashboard.received.set()  # ハブ経由の送信を検知
+                    break
+            except OSError:
+                pass
     except KeyboardInterrupt:
         pass
     if not dashboard.received.is_set():

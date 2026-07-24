@@ -193,6 +193,19 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.register:
+        # 登録直後からハブ（/s/<sid>/）が配信できるよう、空の manifest を先に作る。
+        # ハブの SID 解決は「manifest.json が実在する登録済みセッションのみ」の
+        # fail-closed 設計のため、これが無いと生成開始まで 404 になる
+        target = os.path.realpath(os.path.abspath(args.register))
+        mp = os.path.join(target, "manifest.json")
+        if os.path.isdir(target) and not os.path.exists(mp):
+            try:
+                with open(mp, "w", encoding="utf-8") as f:
+                    json.dump({"version": 1,
+                               "created_at": datetime.now().isoformat(timespec="seconds"),
+                               "slides": {}}, f, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
         upsert(args.register)
         print(session_id(args.register))
         return 0
