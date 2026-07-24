@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>__HUB_SERVER__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TEKION_SLIDES_HOME</key>
+    <string>__TEKION_HOME__</string>
+    <key>TEKION_DASHBOARD_PORT</key>
+    <string>__PORT__</string>
+    <key>TEKION_HUB_VERSION</key>
+    <string>__VERSION__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__LOG_FILE__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_FILE__</string>
+</dict>
+</plist>

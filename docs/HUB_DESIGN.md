@@ -130,3 +130,52 @@
 3. 実装 → テストを書いて実行 → check_dashboard_js.py → 全部緑にする
 4. `git add -A && git commit`（ブランチにコミット。push はしない）
 5. 変更概要・テスト結果・残課題を最終メッセージで報告する
+
+## Codexレビュー所見
+
+### 総評
+
+固定ポートの常駐 Hub にサーバ寿命を集約し、エージェント側をファイル生成・監視だけにする方針は妥当。
+特に「台帳を URL 名前空間の根にする」「セッションカードをページ遷移にする」「従来の単一セッション
+サーバをフォールバックとして残す」の3点は、Codex のプロセス寿命問題と後方互換を同時に解決できる。
+この基本設計を採用して実装する。
+
+### 実装時に補強・変更した判断
+
+1. **常駐先には `hub_server.py` 単体ではなく実行時バンドルをコピーする。**
+   Hub は `review_deck.py`、manifest/export/import 系モジュール、UI アセットを利用するため、
+   1ファイルだけのコピーではプラグインキャッシュ削除後に起動できない。`install_hub.sh` は
+   `~/.tekion-slides/hub/scripts/` に Python ランタイム一式、`hub/assets/ui/` に UI アセットを
+   コピーし、その固定パスを launchd から起動する。
+2. **SID 逆引きは fail closed にする。**
+   SID は指定どおり `sha1(realpath)[:12]` とするが、台帳 SELECT 後に manifest の実在を再確認する。
+   万一同じ12桁 SID に複数実パスが一致した場合は、先勝ちで配信せず 404 にする。台帳から消えた
+   セッション、manifest が消えたセッションも配信しない。
+3. **HTTP とセッション操作を分離し、`review_deck.py` を共有実装の中核にする。**
+   `build_html(base_path=...)` に加え、manifest 更新・feedback 保存・export/import・サムネイル生成を
+   `DashboardService` に集約する。従来 `--serve` と Hub が同じ操作ロジックを使うため、片方だけ挙動が
+   ずれるリスクを下げる。
+4. **閲覧確認と閲覧記録を分離する。**
+   `/viewers` 自身をアクセス時刻に数えると、確認した瞬間に常に active になって初回オープンできない。
+   Hub は `/` の実閲覧と、デッキ画面による `/s/<sid>/status` ポーリングだけを記録し、
+   `/viewers` は読み取り専用にする。記録は monotonic clock で10秒判定する。
+5. **未処理判定は画像ファイルの最新 mtime と feedback の mtime を比較する。**
+   manifest の更新時刻では、並べ替えなど画像修正と無関係な操作でもバッジが消え得るため、
+   設計どおり `images/*.png` の最新時刻を基準にする。feedback は一時ファイルから atomic replace し、
+   同秒内の複数送信を失わないよう履歴名にはマイクロ秒を含める。
+6. **localhost 配信境界を追加で狭める。**
+   bind は引数で変更できない `127.0.0.1` 固定とし、Hub の Host ヘッダーも `127.0.0.1` /
+   `localhost` だけ許可する。静的ファイル、prompt、version 選択、サムネイルは realpath が対象
+   セッション配下であることを再検証し、URL デコード後の traversal と symlink 越しの読み出しを拒否する。
+7. **テスト用ポート `0` は CLI/テストだけで許可する。**
+   通常起動は `TEKION_DASHBOARD_PORT` または 7799。ホスト指定オプションは設けず、不変条件を
+   コマンドラインから崩せないようにする。
+
+### 維持する後方互換
+
+- `review_deck.py --serve`（feedback で終了）
+- `review_deck.py --serve --persist`（feedback 後も継続）
+- `review_deck.py --await-feedback`（ファイル監視）
+- 静的 HTML モードと `generate_slides_parallel.py --with-dashboard`
+
+なお、末尾の旧実装手順にある git 操作は、今回の実行指示で明示的に禁止されたため実施しない。

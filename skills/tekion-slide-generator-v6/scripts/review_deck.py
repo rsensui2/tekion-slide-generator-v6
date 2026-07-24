@@ -160,6 +160,12 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     color: var(--orange-dark); font-size: 14px; font-weight: 600;
   }
   #done-banner.show { display: flex; }
+  .pending-banner {
+    display: flex; align-items: center; gap: 10px;
+    margin: 16px 28px 0; padding: 13px 18px;
+    background: #fff8e7; border: 1px solid #f1cf78; border-radius: 12px;
+    color: #7a4b00; font-size: 13.5px; font-weight: 700;
+  }
 
   .wrap { display: grid; grid-template-columns: 190px minmax(0, 1fr);
           max-width: 1560px; margin: 0 auto; }
@@ -506,6 +512,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .rcard { display: flex; flex-direction: column; align-items: stretch; text-align: left;
            padding: 0 0 16px; border: 1px solid var(--line); border-radius: 16px;
            background: var(--paper); cursor: pointer; overflow: hidden;
+           color: inherit; text-decoration: none;
            box-shadow: var(--shadow-sm); font-family: inherit;
            transition: transform .18s, border-color .18s, box-shadow .18s; }
   .rcard:hover { transform: translateY(-4px); border-color: rgba(255,90,0,.35);
@@ -611,7 +618,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body class="__PAGE_CLASS__">
 <header class="top">
-  <a class="brand" id="brand-link" href="/home" title="トップ画面へ">
+  <a class="brand" id="brand-link" href="__HOME_PATH__" title="トップ画面へ">
 __BRAND_TOP__    <span class="bcol">
       <span class="eyebrow">Slide Dashboard</span>
       <h1>スライドダッシュボード<span class="session mono">__SESSION_NAME__</span></h1>
@@ -623,12 +630,13 @@ __BRAND_TOP__    <span class="bcol">
     <span class="item ink"><span class="n" id="n-ink">0</span><span class="label">要修正</span></span>
   </div>
   <label class="hdr-tool" id="import-btn">＋ 読み込み<input type="file" id="file-input" multiple accept=".pptx,.pdf,.png,.jpg,.jpeg,.webp" hidden></label>
-  <a class="hdr-tool" id="dl-pptx" href="/export/pptx" onclick="busyExport(this)">⤓ PPTX</a>
-  <a class="hdr-tool" id="dl-pdf" href="/export/pdf" onclick="busyExport(this)">⤓ PDF</a>
+  <a class="hdr-tool" id="dl-pptx" href="__BASE_PATH__/export/pptx" onclick="busyExport(this)">⤓ PPTX</a>
+  <a class="hdr-tool" id="dl-pdf" href="__BASE_PATH__/export/pdf" onclick="busyExport(this)">⤓ PDF</a>
   <button class="export" id="submit-btn" onclick="submitAll()">まとめて修正依頼する</button>
 </header>
 
 <div id="done-banner">✓ 送信しました — 担当のAIエージェントが修正を開始します。修正が完了すると、この画面は自動で更新されます。</div>
+__PENDING_BANNER__
 
 <div class="stage-hero" id="stage-hero">
   <div class="pulse"></div>
@@ -675,6 +683,7 @@ __SITES_LOGO__<a href="https://tekion.jp" target="_blank" rel="noopener">tekion.
 <script>
 let TOTAL = __COUNT__;
 const SESSION_DIR = __SESSION_DIR_JSON__;
+const BASE = __BASE_PATH_JSON__;
 const SERVED = location.protocol.startsWith('http');
 if (!SERVED) {
   ['dl-pptx', 'dl-pdf'].forEach(id => document.getElementById(id).style.display = 'none');
@@ -734,7 +743,7 @@ function updateGenProgress(st) {
 async function pollStatus() {
   if (!SERVED) return;
   try {
-    const res = await fetch('/status');
+    const res = await fetch(BASE + '/status');
     const st = await res.json();
     if (!submitted) updateGenProgress(st);
     const sig = st.slides.map(s => s.base + ':' + s.state + ':' + s.versions).join('|');
@@ -800,7 +809,7 @@ async function importFiles(files) {
   try {
     const payload = { mode: newSession ? 'new_session' : 'append', files: [] };
     for (const f of valid) payload.files.push({ name: f.name, data_b64: await readAsB64(f) });
-    const res = await fetch('/import', { method: 'POST',
+    const res = await fetch(BASE + '/import', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const result = await res.json();
     if (!res.ok || !result.ok) throw new Error(result.error || res.status);
@@ -820,7 +829,7 @@ async function importFiles(files) {
 async function openSession(btn) {
   btn.disabled = true; btn.classList.add('busy');
   try {
-    const res = await fetch('/open-session', { method: 'POST',
+    const res = await fetch(BASE + '/open-session', { method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ path: btn.dataset.path }) });
     const r = await res.json();
@@ -861,7 +870,7 @@ async function selectVersion(node) {
   if (prev === node) return;
   applySelection(c, node);  // 楽観的に即反映
   if (!SERVED) return;      // file:// では表示切替のみ（保存はできない）
-  const post = () => fetch('/select-version', { method: 'POST',
+  const post = () => fetch(BASE + '/select-version', { method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ slide: c.dataset.slide, image: node.dataset.orig }) });
   try {
@@ -911,7 +920,7 @@ async function postOrder() {
   if (!SERVED) return;
   const order = [...document.querySelectorAll('main article.proof')].map(a => a.dataset.slide);
   try {
-    const res = await fetch('/reorder', { method: 'POST',
+    const res = await fetch(BASE + '/reorder', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ order }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     flashToast('並び順を保存しました');
@@ -971,7 +980,7 @@ async function togglePrompt(btn) {
   if (pre.dataset.loaded) return;
   pre.textContent = '読み込み中…';
   try {
-    const res = await fetch('/prompt?slide=' + encodeURIComponent(c.dataset.slide));
+    const res = await fetch(BASE + '/prompt?slide=' + encodeURIComponent(c.dataset.slide));
     const r = await res.json();
     if (!res.ok || !r.ok) throw new Error(r.error || ('HTTP ' + res.status));
     pre.textContent = r.prompt;
@@ -1003,7 +1012,7 @@ async function deleteSlide(btn) {
   if (memo.hadImage) TOTAL--;
   renumber(); updateTally();
   try {
-    const res = await fetch('/delete-slide', { method: 'POST',
+    const res = await fetch(BASE + '/delete-slide', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ slide: base }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     undoPending = memo;
@@ -1038,7 +1047,7 @@ async function undoDelete() {
   clearTimeout(undoTimer);
   document.getElementById('undo-toast').classList.remove('show');
   try {
-    const res = await fetch('/restore-slide', { method: 'POST',
+    const res = await fetch(BASE + '/restore-slide', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ slide: memo.base }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     restoreDom(memo);
@@ -1088,7 +1097,7 @@ function freeze(message) {
   btn.disabled = true; btn.textContent = message;
 }
 async function post(payload) {
-  const res = await fetch('/feedback', { method: 'POST',
+  const res = await fetch(BASE + '/feedback', { method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload) });
   if (!res.ok) throw new Error(res.status);
@@ -1255,7 +1264,42 @@ def _spawn_child_server(target: str) -> str | None:
     return child_url
 
 
-def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -> str:
+def _pending_feedback_banner(session_dir: str) -> str:
+    """未処理のフィードバックがあれば、デッキ上部に出すバナー HTML を返す。"""
+    feedback_path = os.path.join(session_dir, "slide_feedback.json")
+    try:
+        feedback_mtime = os.path.getmtime(feedback_path)
+    except OSError:
+        return ""
+    latest_image = 0.0
+    images_dir = os.path.join(session_dir, "images")
+    try:
+        for name in os.listdir(images_dir):
+            if name.lower().endswith(".png"):
+                try:
+                    latest_image = max(latest_image, os.path.getmtime(os.path.join(images_dir, name)))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    if feedback_mtime <= latest_image:
+        return ""
+    import datetime as _dt
+    sent = _dt.datetime.fromtimestamp(feedback_mtime).strftime("%H:%M")
+    return (
+        '<div class="pending-banner">⏳ 未処理の修正指示あり'
+        f'（{sent}送信）— エージェントに「続きを」と伝えてください</div>'
+    )
+
+
+def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
+               base_path: str = "", hub_mode: bool = False) -> str:
+    """デッキまたはホーム画面を組み立てる。
+
+    base_path は常駐 Hub の ``/s/<sid>`` のような URL 接頭辞。空文字の
+    既定値を保つことで、従来の単一セッションサーバと静的 HTML は変わらない。
+    """
+    base_path = ("/" + base_path.strip("/")) if base_path.strip("/") else ""
     # Google Drive 等は同一フォルダに複数のパス表記（マイドライブ/My Drive等）があるため、
     # 実体パスに正規化してから相対パスを計算する
     session_dir = os.path.realpath(os.path.abspath(session_dir))
@@ -1384,7 +1428,8 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
         def _data_uri(name):
             p = os.path.join(ui_dir, name)
             if os.path.exists(p):
-                return "data:image/png;base64," + _b64.b64encode(open(p, "rb").read()).decode()
+                with open(p, "rb") as image_file:
+                    return "data:image/png;base64," + _b64.b64encode(image_file.read()).decode()
             return None
 
         btn_import = _data_uri("btn_import.png")
@@ -1399,23 +1444,36 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
                      and r["slides"] > 0]  # 空セッションはカードにしない
             if _rows:
                 from urllib.parse import quote as _qq
+                from session_registry import session_id as _sid
                 items = []
                 for r in _rows:
                     # タイトルは「題名（プロジェクト / タイムスタンプ）」形式 → 題名を主役に
                     title = r["title"]
                     stem, _, rest = title.partition("（")
                     sub = rest[:-1] if rest.endswith("）") else rest
-                    items.append(
-                        f'        <button class="rcard" onclick="openSession(this)" '
-                        f'data-path="{html.escape(r["path"])}" title="このデッキを開く">'
-                        f'<img class="rthumb" loading="lazy" alt="" '
-                        f'src="/session-thumb?path={_qq(r["path"], safe="")}&amp;w=480" '
-                        f'onerror="this.style.visibility=\'hidden\'">'
-                        f'<span class="rtitle">{html.escape(stem or title)}</span>'
-                        f'<span class="rmeta">{html.escape(r["updated_at"][:16].replace("T", " "))}'
-                        f' · {r["slides"]}枚'
-                        + (f' · {html.escape(sub)}' if sub else '')
-                        + '</span></button>')
+                    meta = (f'<span class="rmeta">{html.escape(r["updated_at"][:16].replace("T", " "))}'
+                            f' · {r["slides"]}枚'
+                            + (f' · {html.escape(sub)}' if sub else '')
+                            + '</span>')
+                    if hub_mode:
+                        sid = r.get("sid") or _sid(r["path"])
+                        href = f"/s/{sid}/"
+                        items.append(
+                            f'        <a class="rcard" href="{href}" title="このデッキを開く">'
+                            f'<img class="rthumb" loading="lazy" alt="" '
+                            f'src="/s/{sid}/session-thumb?w=480" '
+                            f'onerror="this.style.visibility=\'hidden\'">'
+                            f'<span class="rtitle">{html.escape(stem or title)}</span>'
+                            f'{meta}</a>')
+                    else:
+                        items.append(
+                            f'        <button class="rcard" onclick="openSession(this)" '
+                            f'data-path="{html.escape(r["path"])}" title="このデッキを開く">'
+                            f'<img class="rthumb" loading="lazy" alt="" '
+                            f'src="/session-thumb?path={_qq(r["path"], safe="")}&amp;w=480" '
+                            f'onerror="this.style.visibility=\'hidden\'">'
+                            f'<span class="rtitle">{html.escape(stem or title)}</span>'
+                            f'{meta}</button>')
                 recent_html = ('      <section class="recent">\n'
                                '        <div class="sec-head"><span class="eyebrow">Recent Sessions</span>'
                                '<h3>最近のデッキ</h3></div>\n'
@@ -1424,7 +1482,7 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
         except Exception:
             recent_html = ""
 
-        backlink = ('        <a class="backlink" href="/">開いているデッキへ戻る →</a>\n'
+        backlink = (f'        <a class="backlink" href="{base_path or "/"}">開いているデッキへ戻る →</a>\n'
                     if cards else "")
         if btn_import and btn_create:
             choices = f"""      <div class="choices bannerbtns">
@@ -1474,7 +1532,8 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
     logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "assets", "ui", "tekion_logo.png")
     if os.path.exists(logo_path):
-        logo_uri = "data:image/png;base64," + _b64logo.b64encode(open(logo_path, "rb").read()).decode()
+        with open(logo_path, "rb") as logo_file:
+            logo_uri = "data:image/png;base64," + _b64logo.b64encode(logo_file.read()).decode()
         brand_top = (f'    <img class="brandlogo" src="{logo_uri}" alt="TEKION Group">\n'
                      '    <span class="bdiv"></span>\n')
         sites_logo = f'  <img src="{logo_uri}" alt="TEKION Group">\n'
@@ -1483,12 +1542,18 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
         sites_logo = ''
 
     out = PAGE_TEMPLATE
+    pending_banner = "" if page_kind == "home" else _pending_feedback_banner(session_dir)
+    home_path = "/" if hub_mode else (base_path + "/home")
     for k, v in {
         "__BRAND_TOP__": brand_top,
         "__SITES_LOGO__": sites_logo,
         "__TITLE__": html.escape(f"スライドダッシュボード — {session_name}"),
         "__SESSION_NAME__": html.escape(session_name),
         "__PAGE_CLASS__": "page-home" if page_kind == "home" else "page-deck",
+        "__HOME_PATH__": home_path,
+        "__BASE_PATH__": base_path,
+        "__BASE_PATH_JSON__": json.dumps(base_path),
+        "__PENDING_BANNER__": pending_banner,
         "__COUNT__": str(rendered_total),
         "__RAIL__": "" if page_kind == "home" else "\n".join(rail),
         "__CARDS__": landing if page_kind == "home" else "\n".join(cards),
@@ -1496,6 +1561,274 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
     }.items():
         out = out.replace(k, v)
     return out
+
+
+class DashboardService:
+    """単一セッションに対するダッシュボード操作。
+
+    従来サーバと常駐 Hub が同じ manifest 更新・書き出し・フィードバック保存
+    ロジックを使うための薄いサービス層。HTTP の URL 解決と寿命管理は各サーバ側に残す。
+    """
+
+    def __init__(self, session_dir: str, manifest_lock: threading.Lock | None = None,
+                 restrict_paths: bool = False):
+        self.session_dir = os.path.realpath(os.path.abspath(session_dir))
+        self.manifest_path = os.path.join(self.session_dir, "manifest.json")
+        self.feedback_path = os.path.join(self.session_dir, "slide_feedback.json")
+        self.manifest_lock = manifest_lock or threading.Lock()
+        self.restrict_paths = restrict_paths
+
+    def status(self) -> dict:
+        with self.manifest_lock:
+            manifest = load_manifest(self.manifest_path)
+        counts: dict[str, int] = {}
+        items = []
+        for base, entry in manifest.get("slides", {}).items():
+            state = entry.get("state", "unknown")
+            if state == "removed":
+                continue
+            counts[state] = counts.get(state, 0) + 1
+            items.append({
+                "base": base,
+                "state": state,
+                "versions": len(entry.get("versions") or []),
+            })
+        items.sort(key=lambda item: item["base"])
+        return {
+            "total": len(items),
+            "counts": counts,
+            "slides": items,
+            "session": read_session_status(self.session_dir),
+        }
+
+    def prompt(self, base: str) -> tuple[dict, int]:
+        with self.manifest_lock:
+            manifest = load_manifest(self.manifest_path)
+        entry = manifest.get("slides", {}).get(base)
+        if entry is None:
+            return {"ok": False, "error": f"unknown slide: {base}"}, 404
+        candidates = [
+            entry.get("prompt_file") or "",
+            os.path.join(self.session_dir, "prompts", f"{base}.txt"),
+        ]
+        for path in candidates:
+            real_path = os.path.realpath(path) if path else ""
+            allowed = (
+                not self.restrict_paths
+                or real_path.startswith(self.session_dir + os.sep)
+            )
+            if real_path and allowed and os.path.isfile(real_path):
+                try:
+                    with open(real_path, "r", encoding="utf-8") as handle:
+                        text = handle.read()
+                except OSError as exc:
+                    return {"ok": False, "error": str(exc)}, 500
+                return {"ok": True, "prompt": text, "file": os.path.basename(real_path)}, 200
+        return {
+            "ok": False,
+            "error": "プロンプトファイルが見つかりません（取り込みスライドには生成プロンプトがありません）",
+        }, 404
+
+    def select_version(self, slide: str, rel_image: str) -> tuple[dict, int]:
+        image = os.path.realpath(os.path.join(self.session_dir, rel_image))
+        if (not image.startswith(self.session_dir + os.sep)
+                or not os.path.isfile(image)):
+            return {"ok": False, "error": f"image not found: {rel_image}"}, 400
+        with self.manifest_lock:
+            manifest = load_manifest(self.manifest_path)
+            if slide not in manifest.get("slides", {}):
+                return {"ok": False, "error": f"unknown slide: {slide}"}, 404
+            raw_candidate = os.path.join(os.path.dirname(image), "raw", os.path.basename(image))
+            update_entry(
+                manifest,
+                slide,
+                current_image=image,
+                state="validated",
+                raw_image=(raw_candidate if os.path.exists(raw_candidate)
+                           else manifest["slides"][slide].get("raw_image")),
+            )
+            save_manifest(self.manifest_path, manifest)
+        return {"ok": True}, 200
+
+    def reorder(self, order) -> tuple[dict, int]:
+        if not isinstance(order, list) or not all(isinstance(item, str) for item in order):
+            return {"ok": False, "error": "order must be a list of slide names"}, 400
+        with self.manifest_lock:
+            manifest = load_manifest(self.manifest_path)
+            known = manifest.get("slides", {})
+            # 重複は最初の1件だけ採用し、未指定の既存スライドは ordered_bases が末尾に補う。
+            seen = set()
+            new_order = []
+            for base in order:
+                if base in known and base not in seen:
+                    seen.add(base)
+                    new_order.append(base)
+            manifest["slide_order"] = new_order
+            save_manifest(self.manifest_path, manifest)
+        return {"ok": True}, 200
+
+    def set_removed(self, slide: str, removed: bool) -> tuple[dict, int]:
+        with self.manifest_lock:
+            manifest = load_manifest(self.manifest_path)
+            entry = manifest.get("slides", {}).get(slide)
+            if not entry:
+                return {"ok": False, "error": f"unknown slide: {slide}"}, 404
+            if removed:
+                update_entry(
+                    manifest,
+                    slide,
+                    state_before_removal=entry.get("state", "validated"),
+                    state="removed",
+                )
+            else:
+                update_entry(
+                    manifest,
+                    slide,
+                    state=entry.get("state_before_removal", "validated"),
+                )
+            save_manifest(self.manifest_path, manifest)
+        return {"ok": True}, 200
+
+    def save_feedback(self, payload: dict) -> None:
+        os.makedirs(self.session_dir, exist_ok=True)
+        tmp_path = self.feedback_path + ".tmp"
+        with self.manifest_lock:
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, self.feedback_path)
+            try:
+                from datetime import datetime as _dt
+                hist_dir = os.path.join(self.session_dir, "feedback_history")
+                os.makedirs(hist_dir, exist_ok=True)
+                history_path = os.path.join(
+                    hist_dir,
+                    _dt.now().strftime("%Y%m%d_%H%M%S_%f") + ".json",
+                )
+                with open(history_path, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
+
+    def export(self, kind: str) -> tuple[str | None, str | None]:
+        if kind not in ("pptx", "pdf"):
+            return None, None
+        if self.restrict_paths:
+            manifest = load_manifest(self.manifest_path)
+            for base in ordered_bases(manifest):
+                image = manifest["slides"][base].get("current_image")
+                if image:
+                    real_image = os.path.realpath(image)
+                    if not real_image.startswith(self.session_dir + os.sep):
+                        print(f"⚠️  export拒否: セッション外の画像参照 {base}")
+                        return None, None
+        session_name = os.path.basename(self.session_dir)
+        out_path = os.path.join(self.session_dir, f"deck_export.{kind}")
+        images_dir = os.path.join(self.session_dir, "images")
+        with self.manifest_lock:
+            try:
+                if kind == "pptx":
+                    from export_to_pptx import export_to_pptx
+                    ok = export_to_pptx(
+                        images_dir,
+                        out_path,
+                        manifest_path=self.manifest_path,
+                        allow_partial=True,
+                    )
+                else:
+                    from export_to_pdf import export_to_pdf
+                    ok = export_to_pdf(
+                        images_dir,
+                        out_path,
+                        manifest_path=self.manifest_path,
+                        allow_partial=True,
+                    )
+            except Exception as exc:
+                print(f"⚠️  export失敗: {exc}")
+                ok = False
+        return (out_path, f"{session_name}.{kind}") if ok else (None, None)
+
+    def import_files(self, files: list, new_session: bool = False) -> dict:
+        """base64 化されたアップロードを取り込み、結果と対象ディレクトリを返す。"""
+        import base64
+        if new_session:
+            from datetime import datetime as _dt
+            parent = os.path.dirname(self.session_dir)
+            if any(marker in parent for marker in CLOUD_MARKERS):
+                parent = os.path.expanduser("~/Documents/TEKION-Slide-Sessions/slides_output")
+            target_dir = os.path.join(parent, _dt.now().strftime("%Y-%m-%d_%H%M%S_%f"))
+            os.makedirs(target_dir, exist_ok=True)
+        else:
+            target_dir = self.session_dir
+        imports_dir = os.path.join(target_dir, "imports")
+        os.makedirs(imports_dir, exist_ok=True)
+        added = skipped = 0
+        from import_deck import IMAGE_EXTS, import_file
+        for item in files:
+            name = os.path.basename(str(item.get("name", "upload")))
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in ({".pptx", ".pdf"} | IMAGE_EXTS):
+                continue
+            saved = os.path.join(imports_dir, name)
+            with open(saved, "wb") as handle:
+                handle.write(base64.b64decode(item.get("data_b64", ""), validate=True))
+            with self.manifest_lock:
+                result = import_file(saved, target_dir)
+            added += len(result["added"])
+            skipped += len(result["skipped"])
+        if new_session and added > 0:
+            from session_registry import upsert as _registry_upsert
+            _registry_upsert(target_dir)
+        return {
+            "ok": True,
+            "added": added,
+            "skipped": skipped,
+            "target_dir": target_dir,
+        }
+
+    def thumbnail(self, rel: str, width: int, cover: bool = False) -> bytes | None:
+        """セッション配下の画像を JPEG サムネイルにして返す。"""
+        import hashlib
+        if cover:
+            manifest = load_manifest(self.manifest_path)
+            orig = None
+            for base in ordered_bases(manifest):
+                image = manifest["slides"][base].get("current_image")
+                candidate = os.path.realpath(image) if image else ""
+                allowed = (
+                    not self.restrict_paths
+                    or candidate.startswith(self.session_dir + os.sep)
+                )
+                if allowed and os.path.isfile(candidate):
+                    orig = candidate
+                    break
+            if not orig:
+                return None
+            rel_key = f"cover|{orig}"
+        else:
+            orig = os.path.realpath(os.path.join(self.session_dir, rel))
+            if (not orig.startswith(self.session_dir + os.sep)
+                    or not os.path.isfile(orig)):
+                return None
+            rel_key = rel
+        width = max(64, min(2560, int(width)))
+        cache_dir = os.path.join(self.session_dir, ".thumbs")
+        os.makedirs(cache_dir, exist_ok=True)
+        key = hashlib.sha1(
+            f"{rel_key}|{width}|{os.path.getmtime(orig):.9f}".encode("utf-8")
+        ).hexdigest()
+        cached = os.path.join(cache_dir, f"{key}.jpg")
+        if not os.path.isfile(cached):
+            from PIL import Image
+            with Image.open(orig) as image:
+                image = image.convert("RGB")
+                if image.width > width:
+                    image = image.resize(
+                        (width, int(image.height * width / image.width)),
+                        Image.LANCZOS,
+                    )
+                image.save(cached, format="JPEG", quality=82, optimize=True)
+        with open(cached, "rb") as handle:
+            return handle.read()
 
 
 def start_server(session_dir: str, timeout: int, open_browser: bool = True,
@@ -1517,6 +1850,7 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
     feedback_path = os.path.join(session_dir, "slide_feedback.json")
     received = threading.Event()
     manifest_lock = threading.Lock()
+    service = DashboardService(session_dir, manifest_lock)
 
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
@@ -1654,29 +1988,8 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                 # スライドの生成プロンプトを返す（プロンプトライブラリ表示用）
                 from urllib.parse import urlparse, parse_qs
                 base = (parse_qs(urlparse(self.path).query).get("slide") or [""])[0]
-                with manifest_lock:
-                    manifest = load_manifest(manifest_path)
-                entry = manifest.get("slides", {}).get(base)
-                if entry is None:
-                    self._respond_json({"ok": False, "error": f"unknown slide: {base}"}, 404)
-                    return
-                candidates = [entry.get("prompt_file") or "",
-                              os.path.join(session_dir, "prompts", f"{base}.txt")]
-                for p in candidates:
-                    if p and os.path.exists(p):
-                        try:
-                            with open(p, "r", encoding="utf-8") as f:
-                                text = f.read()
-                        except OSError as e:
-                            self._respond_json({"ok": False, "error": str(e)}, 500)
-                            return
-                        self._respond_json({"ok": True, "prompt": text,
-                                            "file": os.path.basename(p)})
-                        return
-                self._respond_json(
-                    {"ok": False,
-                     "error": "プロンプトファイルが見つかりません（取り込みスライドには生成プロンプトがありません）"},
-                    404)
+                result, status = service.prompt(base)
+                self._respond_json(result, status)
                 return
             if self.path in ("/", "/review.html", "/home"):
                 kind = "home" if self.path == "/home" else "deck"
@@ -1687,21 +2000,7 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                 self.end_headers()
                 self.wfile.write(body)
             elif self.path == "/status":
-                with manifest_lock:
-                    manifest = load_manifest(manifest_path)
-                slides = manifest.get("slides", {})
-                counts = {}
-                items = []
-                for base, e in slides.items():
-                    state = e.get("state", "unknown")
-                    if state == "removed":
-                        continue  # 削除済みは進捗・件数に含めない
-                    counts[state] = counts.get(state, 0) + 1
-                    items.append({"base": base, "state": state,
-                                  "versions": len(e.get("versions") or [])})
-                items.sort(key=lambda x: x["base"])
-                self._respond_json({"total": len(items), "counts": counts, "slides": items,
-                                    "session": read_session_status(session_dir)})
+                self._respond_json(service.status())
             elif self.path == "/sessions":
                 try:
                     from session_registry import list_sessions
@@ -1712,30 +2011,15 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                 self._respond_json({"sessions": rows})
             elif self.path in ("/export/pptx", "/export/pdf"):
                 kind = self.path.rsplit("/", 1)[1]
-                session_name = os.path.basename(session_dir)
-                out_path = os.path.join(session_dir, f"deck_export.{kind}")
-                images_dir = os.path.join(session_dir, "images")
-                with manifest_lock:
-                    try:
-                        if kind == "pptx":
-                            from export_to_pptx import export_to_pptx
-                            ok = export_to_pptx(images_dir, out_path,
-                                                manifest_path=manifest_path, allow_partial=True)
-                        else:
-                            from export_to_pdf import export_to_pdf
-                            ok = export_to_pdf(images_dir, out_path,
-                                               manifest_path=manifest_path, allow_partial=True)
-                    except Exception as e:
-                        print(f"⚠️  export失敗: {e}")
-                        ok = False
-                if not ok:
+                out_path, filename = service.export(kind)
+                if not out_path:
                     self.send_error(500, "export failed")
                     return
                 from urllib.parse import quote
                 mime = ("application/vnd.openxmlformats-officedocument.presentationml.presentation"
                         if kind == "pptx" else "application/pdf")
-                self._send_file_download(out_path, quote(f"{session_name}.{kind}"), mime)
-                print(f"⤓ デッキを書き出してダウンロード: {session_name}.{kind}")
+                self._send_file_download(out_path, quote(filename), mime)
+                print(f"⤓ デッキを書き出してダウンロード: {filename}")
             else:
                 super().do_GET()
 
@@ -1750,24 +2034,12 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                 try:
                     slide = payload.get("slide", "")
                     rel_image = payload.get("image", "")
-                    image = os.path.normpath(os.path.join(session_dir, rel_image))
-                    # session_dir 配下の実在ファイルのみ許可
-                    if not image.startswith(session_dir + os.sep) or not os.path.exists(image):
-                        self._respond_json({"ok": False, "error": f"image not found: {rel_image}"}, 400)
+                    result, status = service.select_version(slide, rel_image)
+                    if status != 200:
+                        self._respond_json(result, status)
                         return
-                    with manifest_lock:
-                        manifest = load_manifest(manifest_path)
-                        if slide not in manifest.get("slides", {}):
-                            self._respond_json({"ok": False, "error": f"unknown slide: {slide}"}, 404)
-                            return
-                        raw_candidate = os.path.join(os.path.dirname(image), "raw",
-                                                     os.path.basename(image))
-                        update_entry(manifest, slide, current_image=image, state="validated",
-                                     raw_image=raw_candidate if os.path.exists(raw_candidate)
-                                     else manifest["slides"][slide].get("raw_image"))
-                        save_manifest(manifest_path, manifest)
-                    print(f"📌 確定版を変更: {slide} → {os.path.basename(image)}", flush=True)
-                    self._respond_json({"ok": True})
+                    print(f"📌 確定版を変更: {slide} → {os.path.basename(rel_image)}", flush=True)
+                    self._respond_json(result)
                 except Exception as e:
                     import traceback
                     traceback.print_exc()
@@ -1777,40 +2049,20 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
 
             if self.path == "/reorder":
                 order = payload.get("order")
-                if not isinstance(order, list):
-                    self._respond_json({"ok": False, "error": "order must be a list"}, 400)
-                    return
-                with manifest_lock:
-                    manifest = load_manifest(manifest_path)
-                    known = manifest.get("slides", {})
-                    manifest["slide_order"] = [b for b in order if b in known]
-                    save_manifest(manifest_path, manifest)
-                print(f"↕️  並び順を保存: {len(order)}枚", flush=True)
-                self._respond_json({"ok": True})
+                result, status = service.reorder(order)
+                if status == 200:
+                    print(f"↕️  並び順を保存: {len(order)}枚", flush=True)
+                self._respond_json(result, status)
                 return
 
             if self.path in ("/delete-slide", "/restore-slide"):
                 slide = payload.get("slide", "")
                 restore = self.path == "/restore-slide"
-                with manifest_lock:
-                    manifest = load_manifest(manifest_path)
-                    entry = manifest.get("slides", {}).get(slide)
-                    if not entry:
-                        self._respond_json({"ok": False, "error": f"unknown slide: {slide}"}, 404)
-                        return
-                    if restore:
-                        update_entry(manifest, slide,
-                                     state=entry.get("state_before_removal", "validated"))
-                    else:
-                        # ソフトデリート: 画像はディスクに残し、表示・エクスポート・
-                        # 再生成の対象から外す（「元に戻す」で復元できる）
-                        update_entry(manifest, slide,
-                                     state_before_removal=entry.get("state", "validated"),
-                                     state="removed")
-                    save_manifest(manifest_path, manifest)
-                print(("↩️  スライドを復元: " if restore else "🗑  スライドを削除（復元可）: ")
-                      + slide, flush=True)
-                self._respond_json({"ok": True})
+                result, status = service.set_removed(slide, removed=not restore)
+                if status == 200:
+                    print(("↩️  スライドを復元: " if restore else "🗑  スライドを削除（復元可）: ")
+                          + slide, flush=True)
+                self._respond_json(result, status)
                 return
 
             if self.path == "/import":
@@ -1881,19 +2133,7 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                 return
 
             if self.path == "/feedback":
-                with open(feedback_path, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, ensure_ascii=False, indent=2)
-                # 常駐モードでは複数ラウンド送られるため履歴にも残す
-                try:
-                    from datetime import datetime as _dt
-                    hist_dir = os.path.join(session_dir, "feedback_history")
-                    os.makedirs(hist_dir, exist_ok=True)
-                    with open(os.path.join(hist_dir,
-                                           _dt.now().strftime("%Y%m%d_%H%M%S") + ".json"),
-                              "w", encoding="utf-8") as hf:
-                        json.dump(payload, hf, ensure_ascii=False, indent=2)
-                except OSError:
-                    pass
+                service.save_feedback(payload)
                 self._respond_json({"ok": True})
                 received.set()
                 if exit_on_feedback:
