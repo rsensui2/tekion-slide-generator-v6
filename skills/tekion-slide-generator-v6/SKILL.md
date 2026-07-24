@@ -81,7 +81,12 @@ TIMESTAMP=$(date +%Y-%m-%d_%H%M%S) && OUTPUT_DIR="[指定された出力先]" &&
 
 （秒まで含めることで同時起動セッションの衝突を防ぐ）
 
-続けて**校正室をバックグラウンドで起動**する（`run_in_background: true`）:
+続けて**校正室をバックグラウンドで起動**する。`--serve` は修正指示を受信するまで戻らない
+ブロッキングプロセスなので、必ず自分の環境のバックグラウンド実行手段を使う:
+
+- Claude Code: Bash ツールの `run_in_background: true` で実行（完了通知 = 修正依頼の受信）
+- Codex ほか: `nohup ${PYTHON} ... --serve > "${SESSION_DIR}/review_server.log" 2>&1 &` で起動し、
+  修正依頼は `${SESSION_DIR}/slide_feedback.json` の出現をポーリングして検知する
 
 ```bash
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
@@ -234,14 +239,18 @@ JSONEOF
 
 ```bash
 unset OPENAI_API_KEY 2>/dev/null
+eval "$(${PYTHON} "${SKILL_DIR}/scripts/resolve_brand.py")"
 ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
   --provider codex \
   --prompts-dir "${SESSION_DIR}/prompts" \
   --output-dir "${SESSION_DIR}/images" \
   --image-size 2K \
-  --logo "${SKILL_DIR}/assets/logo.png"
+  --logo "${LOGO}"
 ```
 
+- `resolve_brand.py` がアクティブプリセットの `<slug>.config.json` から `LOGO` /
+  `SLIDE_LOGO_POSITION` / `SLIDE_LOGO_SCALE`（/ `SLIDE_FOOTER_TEXT`）を解決する
+  （config が無ければグローバル `assets/logo.png`・右下・0.09）。ブランド登録は `design-setup` スキル
 - `--logo` は常に付与する（ユーザーが「ロゴ不要」と言ったときだけ外す）
 - Phase 5 でスタイルアンカーを作った場合のみ `--style-anchor "${SESSION_DIR}/style_board.png"` を追加する
 - これ1コマンドで、枚数ぶんの一斉ファンアウト（上限20・429検知で自動減速）→ 生成毎の機械検証
@@ -282,11 +291,12 @@ ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" -
 ```bash
 # 指示編集: 現行スライド（raw）を参照に、指示された変更のみ適用
 unset OPENAI_API_KEY 2>/dev/null
+eval "$(${PYTHON} "${SKILL_DIR}/scripts/resolve_brand.py")"
 ${PYTHON} "${SKILL_DIR}/scripts/edit_slide.py" \
   --session-dir "${SESSION_DIR}" \
   --slide 02_solution_02 \
   --instruction "グラフの数値を 45% → 52% に修正。他は変更しない" \
-  --logo "${SKILL_DIR}/assets/logo.png"
+  --logo "${LOGO}"
 
 # 赤ペン編集: ユーザーが注釈を書き込んだ画像を渡す（注釈画像のみを参照にする）
 ${PYTHON} "${SKILL_DIR}/scripts/edit_slide.py" \
