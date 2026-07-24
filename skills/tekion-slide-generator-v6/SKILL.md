@@ -1,6 +1,6 @@
 ---
 name: tekion-slide-generator-v6
-description: "TEKION Slide Generator v6 — Markdown/テキストから日本語プレゼンスライド（16:9）を生成し PPTX/PDF まで書き出す。ユーザーが『スライドを作って』『プレゼン資料/提案書/企画書/ピッチデッキにして』『この資料をデッキ化』『登壇用の資料』のようにスライド作成を求めたら、ツール名を明示しなくても使うこと。既存の PPTX/PDF を『このパワポを直して』『既存の資料を修正して』と言われた場合もこのスキルで取り込んで改修する。起点はブラウザの『校正室』: 生成の実況、スライド毎の赤入れ→ワンクリック修正依頼、バージョン比較（選択=確定）、既存デッキのドラッグ&ドロップ取り込み、PPTX/PDF ダウンロードまで1画面で完結。核となる機能: (1) 枚数ぶんの一斉並列生成 + レート制限時の自動減速、(2) manifest + 検証スイープ + resume で『N枚頼んだらN枚返る』ゼロ欠損保証、(3) 差分編集・赤ペン編集・ロールバック。画像生成は Codex 内蔵 gpt-image-2（ChatGPT/Codex サブスク枠、API 従量課金なし）。"
+description: "TEKION Slide Generator v6 — Markdown/テキストから日本語プレゼンスライド（16:9）を生成し PPTX/PDF まで書き出す。ユーザーが『スライドを作って』『プレゼン資料/提案書/企画書/ピッチデッキにして』『この資料をデッキ化』『登壇用の資料』のようにスライド作成を求めたら、ツール名を明示しなくても使うこと。既存の PPTX/PDF を『このパワポを直して』『既存の資料を修正して』と言われた場合もこのスキルで取り込んで改修する。起点はブラウザの『スライドダッシュボード』: 生成の実況、スライド毎の赤入れ→ワンクリック修正依頼、バージョン比較（選択=確定）、既存デッキのドラッグ&ドロップ取り込み、PPTX/PDF ダウンロードまで1画面で完結。核となる機能: (1) 枚数ぶんの一斉並列生成 + レート制限時の自動減速、(2) manifest + 検証スイープ + resume で『N枚頼んだらN枚返る』ゼロ欠損保証、(3) 差分編集・赤ペン編集・ロールバック。画像生成は Codex 内蔵 gpt-image-2（ChatGPT/Codex サブスク枠、API 従量課金なし）。"
 ---
 
 # TEKION Slide Generator v6 — 「全枚数、確実に、同じ顔で。」
@@ -73,7 +73,7 @@ python3 -c "import PIL, pptx, requests, jinja2; print('OK')" 2>/dev/null || bash
 
 未ログインなら **STOP**（`codex` を一度起動してログイン）。
 
-## Phase 1: セッション準備 + 校正室の起動（ここが起点）
+## Phase 1: セッション準備 + スライドダッシュボードの起動（ここが起点）
 
 ```bash
 TIMESTAMP=$(date +%Y-%m-%d_%H%M%S) && OUTPUT_DIR="[指定された出力先]" && SESSION_DIR="${OUTPUT_DIR}/slides_output/${TIMESTAMP}" && mkdir -p "${SESSION_DIR}/json" "${SESSION_DIR}/prompts" "${SESSION_DIR}/images"
@@ -81,12 +81,17 @@ TIMESTAMP=$(date +%Y-%m-%d_%H%M%S) && OUTPUT_DIR="[指定された出力先]" &&
 
 （秒まで含めることで同時起動セッションの衝突を防ぐ）
 
-続けて**校正室をバックグラウンドで起動**する。`--serve` は修正指示を受信するまで戻らない
-ブロッキングプロセスなので、必ず自分の環境のバックグラウンド実行手段を使う:
+続けて**スライドダッシュボードを起動**する。`--serve` はユーザーが「修正を依頼する」を
+押すまで戻らないブロッキングプロセス。エージェントごとの正しい起動方法:
 
-- Claude Code: Bash ツールの `run_in_background: true` で実行（完了通知 = 修正依頼の受信）
-- Codex ほか: `nohup ${PYTHON} ... --serve > "${SESSION_DIR}/review_server.log" 2>&1 &` で起動し、
-  修正依頼は `${SESSION_DIR}/slide_feedback.json` の出現をポーリングして検知する
+- **Claude Code**: Bash ツールの `run_in_background: true` で実行。プロセスの完了通知が
+  「修正依頼の受信」を意味するので、通知が来たら `slide_feedback.json` を読んで差分編集へ
+- **Codex ほか**: 生成が終わってレビュー待ちになったら、**そのまま前面で実行してよい**
+  （ユーザーが送信するとコマンドが exit 0 で戻るので、続けて `slide_feedback.json` を読む。
+  exit 2 はタイムアウト）。ターンを終える必要がある場合は `nohup ... &` で起動したままにし、
+  次のユーザー発話時に必ず `${SESSION_DIR}/slide_feedback.json` の有無を確認して処理する。
+  **サーバプロセスが死ぬと送信ボタンが機能しなくなる**ため、ターン終了時にサーバを
+  道連れにしない（nohup 必須）
 
 ```bash
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
@@ -95,14 +100,20 @@ ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" -
 ブラウザにスタート画面が開き、ユーザーは2つの入り口を選べる:
 
 - **既存デッキを読み込む**: ユーザーが PPTX/PDF/画像をドロップ → 1枚ずつのスライドに分解されて
-  校正室に並ぶ。この場合 Phase 2〜7 は不要で、そのまま Phase 8（赤入れ → 差分編集）に入る
-- **新しく作る**: このまま Phase 2 以降を進める。**Phase 7 の生成進捗は校正室に実況される**
+  スライドダッシュボードに並ぶ。この場合 Phase 2〜7 は不要で、そのまま Phase 8（赤入れ → 差分編集）に入る
+- **新しく作る**: このまま Phase 2 以降を進める。**Phase 7 の生成進捗はスライドダッシュボードに実況される**
   （「生成中 n / N」表示、完成したスライドから順に画面に現れる）
 
-校正室のプロセスはユーザーが修正指示を送信すると完了する。完了通知を受けたら
+スライドダッシュボードのプロセスはユーザーが修正指示を送信すると完了する。完了通知を受けたら
 `slide_feedback.json` を読み、Phase 8 の差分編集に入る（生成前・生成中に届くこともある）。
 
 ## Phase 2: デザインガイドライン作成
+
+まずダッシュボードに現在ステージを知らせる（実況表示に出る）:
+
+```bash
+echo '{"stage":"planning","detail":"デザインとスライド構成を執筆中"}' > "${SESSION_DIR}/session_status.json"
+```
 
 `${SKILL_DIR}/references/design_guidelines_template.md` をベースに `${SESSION_DIR}/design_guidelines.md` を作る。
 
@@ -270,7 +281,7 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
 
 ## Phase 8: レビュー → 差分編集
 
-デッキをブラウザレビューア「校正室」で開き、ユーザーにスライド単位でフィードバックをもらう。
+デッキをブラウザレビューア「スライドダッシュボード」で開き、ユーザーにスライド単位でフィードバックをもらう。
 **バックグラウンドで実行する**（`run_in_background: true`）:
 
 ```bash
@@ -334,7 +345,7 @@ ${PYTHON} "${SKILL_DIR}/scripts/export_to_pdf.py" \
 ## 既存デッキの改修（PPTX / PDF / 画像の取り込み）
 
 既存デッキを取り込んで、生成デッキと同じように赤入れ → 差分編集 → export で改修できる。
-入り口は2つ: **校正室へのドラッグ&ドロップ / 「＋ 読み込み」ボタン**（推奨）、または CLI:
+入り口は2つ: **スライドダッシュボードへのドラッグ&ドロップ / 「＋ 読み込み」ボタン**（推奨）、または CLI:
 
 ```bash
 ${PYTHON} "${SKILL_DIR}/scripts/import_deck.py" \

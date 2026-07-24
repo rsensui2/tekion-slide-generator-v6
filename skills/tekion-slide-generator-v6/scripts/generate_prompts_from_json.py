@@ -383,6 +383,12 @@ def main():
     # 出力ディレクトリ作成
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # ダッシュボード実況: プロンプト生成ステージ
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from manifest_utils import set_session_status
+    set_session_status(str(session_dir), "prompting", "画像プロンプトを生成中")
+
     # テンプレートパス設定（スタイル別 + --template-path オーバーライド）
     script_dir = Path(__file__).parent
     skill_dir = script_dir.parent
@@ -513,6 +519,22 @@ def main():
 
     if failed_count > 0:
         sys.exit(1)
+
+    # ダッシュボード実況: 全スライドをプレースホルダー登録（生成前から枠が見える）
+    try:
+        from manifest_utils import load_manifest, save_manifest, get_entry, update_entry
+        manifest_path = session_dir / "manifest.json"
+        manifest = load_manifest(str(manifest_path))
+        for slide in slides:
+            base = f"{extract_file_basename(slide.get('source_file', ''))}_{slide.get('_file_slide_number', 1):02d}"
+            entry = get_entry(manifest, base)
+            if entry.get("state") != "validated":
+                update_entry(manifest, base, state="planned")
+        save_manifest(str(manifest_path), manifest)
+        set_session_status(str(session_dir), "prompted",
+                           f"プロンプト生成完了。画像生成の開始を待機中", total=len(slides))
+    except Exception as e:
+        print(f"⚠️  placeholder registration skipped: {e}")
 
     print("\n✓ All prompts generated successfully!")
 

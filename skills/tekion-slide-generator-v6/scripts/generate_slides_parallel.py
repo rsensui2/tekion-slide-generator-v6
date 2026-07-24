@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest_utils import (
     classify_error, get_entry, load_manifest, prompt_hash, save_manifest,
-    summarize, update_entry, validate_image,
+    set_session_status, summarize, update_entry, validate_image,
 )
 
 PARALLEL_CAP_DEFAULT = 20  # 実測: 2K・並列20で throttle なし（20枚/68秒）
@@ -419,6 +419,9 @@ def main():
     gate = AdaptiveGate(initial=initial_parallel, cap=args.parallel_cap)
     abort_event = threading.Event()
     start_time = time.time()
+    session_dir_for_status = os.path.dirname(manifest_path)
+    set_session_status(session_dir_for_status, "generating",
+                       f"{len(tasks)}枚を並列生成中", total=len(prompt_files))
 
     # ---- メインパス ----
     failed = run_pass(tasks, args, retry_script, per_slide_timeout, gate, abort_event,
@@ -467,6 +470,10 @@ def main():
         print("\n❌ 認証エラーで中断しました。`codex login` で再ログイン後、"
               "同じコマンドを再実行してください（生成済みスライドは resume でスキップされます）。")
         sys.exit(2)
+
+    set_session_status(session_dir_for_status,
+                       "attention" if failed or abort_event.is_set() else "done",
+                       "一部スライドが未完成（再実行で回収されます）" if failed else "全スライド生成完了")
 
     if failed:
         print("\n⚠️  未完成のスライドがあります:")

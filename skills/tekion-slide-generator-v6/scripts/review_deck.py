@@ -31,7 +31,7 @@ import sys
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from manifest_utils import load_manifest, save_manifest, update_entry
+from manifest_utils import load_manifest, read_session_status, save_manifest, update_entry
 
 PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="ja">
@@ -286,11 +286,51 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   footer.sites a:hover { color: var(--blue); text-decoration: underline; }
   footer.sites .sep { color: #c4ccd6; }
 
-  /* Ryoko バナーボタン（スタート画面） */
-  .choices.banner { grid-template-columns: 1fr; gap: 18px; max-width: 640px; margin: 0 auto; }
+  /* ステージ実況ヒーロー */
+  .stage-hero {
+    display: none; align-items: center; gap: 16px;
+    max-width: 720px; margin: 20px auto 0; padding: 20px 26px;
+    background: var(--paper); border: 1.5px solid #c7d9f5; border-radius: 14px;
+    box-shadow: 0 4px 16px #104f9e14;
+  }
+  .stage-hero.show { display: flex; }
+  .stage-hero .pulse {
+    width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto;
+    background: radial-gradient(circle at 35% 35%, #3d7fd9, var(--blue));
+    animation: heartbeat 1.6s ease-in-out infinite;
+  }
+  .stage-hero .stxt { display: flex; flex-direction: column; gap: 3px; }
+  .stage-hero .stitle { font-size: 16px; font-weight: 700; color: var(--blue); }
+  .stage-hero .sdetail { font-size: 12.5px; color: var(--sub); }
+  .stage-hero .sdots::after { content: ""; animation: dots 1.5s steps(4) infinite; }
+  @keyframes heartbeat { 0%,100% { transform: scale(1); opacity: 1; }
+                         50% { transform: scale(1.18); opacity: .75; } }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+
+  /* 生成待ちプレースホルダーカード */
+  .ph-frame { position: relative; aspect-ratio: 16 / 9; border-radius: 6px;
+              border: 1.5px dashed #c3cede; overflow: hidden;
+              background: linear-gradient(110deg, #eef2f8 35%, #f8fafd 50%, #eef2f8 65%);
+              background-size: 220% 100%; animation: shimmer 1.8s linear infinite; }
+  @keyframes shimmer { to { background-position-x: -220%; } }
+  .ph-frame .ph-label { position: absolute; inset: 0; display: flex; flex-direction: column;
+                        align-items: center; justify-content: center; gap: 8px;
+                        color: #9aa8bb; font-size: 13px; font-weight: 600; }
+  .ph-frame .ph-num { font-size: 34px; font-weight: 200; color: #c3cede; }
+  .proof.placeholder { border-style: dashed; box-shadow: none; }
+  .proof.placeholder .state { color: #9aa8bb; }
+  .rail .ph-thumb { aspect-ratio: 16 / 9; border-radius: 4px; border: 1.5px dashed #c3cede;
+                    background: #eef2f8; }
+  @media (prefers-reduced-motion: reduce) {
+    .ph-frame, .stage-hero .pulse { animation: none; }
+  }
+
+  /* Ryoko バナーボタン（スタート画面・横並び） */
+  .choices.banner { grid-template-columns: 1fr 1fr; gap: 20px; max-width: 900px; margin: 0 auto; }
+  @media (max-width: 760px) { .choices.banner { grid-template-columns: 1fr; } }
   .banner-btn { display: block; border: 0; padding: 0; background: none; cursor: pointer;
-                border-radius: 16px; overflow: hidden; width: 100%;
-                box-shadow: 0 4px 14px #0f254622; transition: transform .15s, box-shadow .15s; }
+                border-radius: 18px; overflow: hidden; width: 100%; line-height: 0;
+                box-shadow: 0 6px 18px #0f254626; transition: transform .15s, box-shadow .15s; }
   .banner-btn img { display: block; width: 100%; height: auto; }
   .banner-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 28px #0f254633; }
   .banner-btn:active { transform: translateY(0); }
@@ -322,6 +362,15 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     article.proof:nth-child(n+4) { animation-delay: .15s; }
     @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
   }
+  @media (max-width: 1280px) {
+    .wrap { grid-template-columns: 150px minmax(0, 1fr); }
+    main { padding: 20px 18px 60px; }
+    .proof .head { padding: 12px 16px 10px; }
+    .proof figure, .proof .body { padding-left: 16px; padding-right: 16px; }
+    .slip { margin: 12px 16px 16px; }
+    .proof .ord { font-size: 20px; }
+    .proof .body.with-versions { grid-template-columns: minmax(0,1fr) 190px; }
+  }
   @media (max-width: 1100px) {
     .proof .body.with-versions { grid-template-columns: 1fr; }
     aside.vtree { display: flex; gap: 12px; padding-left: 0; overflow-x: auto; }
@@ -343,7 +392,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <header class="top">
   <div class="brand">
 __BRAND_TOP__
-    <h1>校正室<span class="session mono">__SESSION_NAME__</span></h1>
+    <h1>スライドダッシュボード<span class="session mono">__SESSION_NAME__</span></h1>
   </div>
   <span class="genprog mono" id="gen-progress" hidden></span>
   <div class="tally">
@@ -357,6 +406,14 @@ __BRAND_TOP__
 </header>
 
 <div class="banner" id="done-banner">✓ 送信しました — Claude が修正を開始します。このタブは閉じて構いません。</div>
+
+<div class="stage-hero" id="stage-hero">
+  <div class="pulse"></div>
+  <div class="stxt">
+    <span class="stitle"><span id="stage-title">準備中</span><span class="sdots"></span></span>
+    <span class="sdetail" id="stage-detail"></span>
+  </div>
+</div>
 
 <div class="wrap">
   <nav class="rail" aria-label="スライド索引">
@@ -398,9 +455,16 @@ function hasUserInput() {
   if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') return true;
   return [...document.querySelectorAll('textarea[data-slide]')].some(t => t.value.trim());
 }
+const STAGE_LABELS = {
+  planning:  ['スライド構成を執筆中', 'Claude が内容を設計しています'],
+  prompting: ['画像プロンプトを生成中', 'デザイン指示を組み立てています'],
+  prompted:  ['画像生成の開始を待機中', 'まもなく並列生成が始まります'],
+  generating: ['スライドを生成中', ''],
+  attention: ['一部スライドが未完成', '再実行すると欠損分だけ回収されます'],
+};
 function updateGenProgress(st) {
   const el = document.getElementById('gen-progress');
-  const pending = st.counts.pending || 0;
+  const pending = (st.counts.pending || 0) + (st.counts.planned || 0);
   const failed = st.counts.failed || 0;
   const done = st.counts.validated || 0;
   if (pending > 0) {
@@ -411,6 +475,22 @@ function updateGenProgress(st) {
     el.textContent = '⚠ 未完成 ' + failed + '枚（再実行で回収されます）';
   } else {
     el.hidden = true;
+  }
+
+  // ステージヒーロー: 生成前の段階と「1枚もできていない生成中」で大きく実況する
+  const hero = document.getElementById('stage-hero');
+  const stage = (st.session && st.session.stage) || '';
+  const preStages = ['planning', 'prompting', 'prompted'];
+  const showHero = preStages.includes(stage) || (stage === 'generating' && done === 0 && st.total > 0)
+                   || (pending === 0 && failed > 0 && stage === 'attention');
+  if (showHero && STAGE_LABELS[stage]) {
+    document.getElementById('stage-title').textContent =
+      stage === 'generating' ? 'スライドを生成中（' + done + ' / ' + st.total + '）' : STAGE_LABELS[stage][0];
+    document.getElementById('stage-detail').textContent =
+      (st.session && st.session.detail) || STAGE_LABELS[stage][1];
+    hero.classList.add('show');
+  } else {
+    hero.classList.remove('show');
   }
 }
 async function pollStatus() {
@@ -635,6 +715,21 @@ __VTREE__
 
 RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><span class="tag">__ORD__</span><img src="__CUR_SRC__" alt="__NAME__ サムネイル"></a>"""
 
+PLACEHOLDER_CARD_TEMPLATE = """    <article class="proof placeholder" id="p-__NAME__" data-slide="__NAME__">
+      <div class="head">
+        <span class="ord">__ORD__</span>
+        <span class="id mono">__NAME__</span>
+        <span class="state">__PH_STATE__</span>
+      </div>
+      <div class="body">
+        <div class="maincol">
+          <div class="ph-frame"><span class="ph-label"><span class="ph-num">__ORD__</span>__PH_STATE__</span></div>
+        </div>
+      </div>
+    </article>"""
+
+PLACEHOLDER_RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><span class="tag">__ORD__</span><div class="ph-thumb"></div></a>"""
+
 
 def build_html(session_dir: str) -> str:
     manifest_path = os.path.join(session_dir, "manifest.json")
@@ -649,12 +744,26 @@ def build_html(session_dir: str) -> str:
                      key=lambda kv: (0 if "course_title" in kv[0] else 1, natural_key(kv[0])))
 
     cards, rail = [], []
+    rendered_total = 0
     ord_no = 0
     for base, entry in ordered:
         current = entry.get("current_image")
         if not current or not os.path.exists(current):
+            # 画像がまだ無いスライドはプレースホルダーで枠を出す（生成前から全体像が見える）
+            ord_no += 1
+            state = entry.get("state", "pending")
+            ph_state = {"failed": "再試行待ち", "planned": "生成待ち"}.get(state, "生成中")
+            subs = {"__NAME__": html.escape(base), "__ORD__": f"{ord_no:02d}",
+                    "__PH_STATE__": ph_state}
+            card, rail_item = PLACEHOLDER_CARD_TEMPLATE, PLACEHOLDER_RAIL_TEMPLATE
+            for k, v in subs.items():
+                card = card.replace(k, v)
+                rail_item = rail_item.replace(k, v)
+            cards.append(card)
+            rail.append(rail_item)
             continue
         ord_no += 1
+        rendered_total += 1
         versions = [v for v in (entry.get("versions") or [current]) if os.path.exists(v)]
         if current not in versions:
             versions.append(current)
@@ -754,9 +863,9 @@ def build_html(session_dir: str) -> str:
     for k, v in {
         "__BRAND_TOP__": brand_top,
         "__SITES_LOGO__": sites_logo,
-        "__TITLE__": html.escape(f"校正室 — {session_name}"),
+        "__TITLE__": html.escape(f"スライドダッシュボード — {session_name}"),
         "__SESSION_NAME__": html.escape(session_name),
-        "__COUNT__": str(len(cards)),
+        "__COUNT__": str(rendered_total),
         "__RAIL__": "\n".join(rail),
         "__CARDS__": landing if landing else "\n".join(cards),
         "__SESSION_DIR_JSON__": json.dumps(os.path.abspath(session_dir), ensure_ascii=False),
@@ -828,7 +937,8 @@ def serve(session_dir: str, timeout: int) -> int:
                     items.append({"base": base, "state": state,
                                   "versions": len(e.get("versions") or [])})
                 items.sort(key=lambda x: x["base"])
-                self._respond_json({"total": len(items), "counts": counts, "slides": items})
+                self._respond_json({"total": len(items), "counts": counts, "slides": items,
+                                    "session": read_session_status(session_dir)})
             elif self.path in ("/export/pptx", "/export/pdf"):
                 kind = self.path.rsplit("/", 1)[1]
                 session_name = os.path.basename(session_dir)

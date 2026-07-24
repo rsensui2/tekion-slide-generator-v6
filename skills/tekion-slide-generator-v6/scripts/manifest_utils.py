@@ -192,6 +192,31 @@ def collect_current_images(manifest_path: str, allow_partial: bool = False):
     return [img for _, img in files], incomplete
 
 
+def set_session_status(session_dir: str, stage: str, detail: str = "", total=None) -> None:
+    """セッションの現在ステージを書き出す（ダッシュボードの実況表示が読む）。
+
+    stage: planning / prompting / generating / done / attention
+    """
+    status = {"stage": stage, "detail": detail, "updated_at": now_iso()}
+    if total is not None:
+        status["total"] = total
+    path = os.path.join(session_dir, "session_status.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False)
+    except OSError:
+        pass  # 実況はベストエフォート。本処理を止めない
+
+
+def read_session_status(session_dir: str) -> dict:
+    path = os.path.join(session_dir, "session_status.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def summarize(manifest: dict) -> dict:
     """状態別のスライド数を集計する。"""
     counts: dict[str, int] = {}
