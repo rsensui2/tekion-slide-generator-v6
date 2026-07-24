@@ -57,21 +57,37 @@ def load_manifest(path: str) -> dict:
 
 
 def save_manifest(path: str, manifest: dict) -> None:
-    """atomic write（一時ファイル→rename）。並列ワーカーからの保存でも壊れない。"""
+    """atomic write（一時ファイル→rename）。並列ワーカーからの保存でも壊れない。
+
+    Google Drive / Dropbox 等のクラウド同期フォルダでは rename が同期の瞬間に
+    一時的に失敗することがあるため、短いリトライで吸収する。
+    """
+    import time as _time
     manifest = {**manifest, "updated_at": now_iso()}
     dir_name = os.path.dirname(path) or "."
     os.makedirs(dir_name, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".manifest.tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-    except BaseException:
+    last_err = None
+    for attempt in range(3):
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".manifest.tmp")
         try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+            return
+        except OSError as e:
+            last_err = e
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            _time.sleep(0.25 * (attempt + 1))
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    raise last_err
 
 
 def get_entry(manifest: dict, slide_base: str) -> dict:

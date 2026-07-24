@@ -616,14 +616,23 @@ async function selectVersion(node) {
   if (prev === node) return;
   applySelection(c, node);  // 楽観的に即反映
   if (!SERVED) return;      // file:// では表示切替のみ（保存はできない）
+  const post = () => fetch('/select-version', { method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ slide: c.dataset.slide, image: node.dataset.orig }) });
   try {
-    const res = await fetch('/select-version', { method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ slide: c.dataset.slide, image: node.dataset.orig }) });
-    if (!res.ok) throw new Error(res.status);
+    let res = await post();
+    if (!res.ok) {
+      await new Promise(r => setTimeout(r, 600));  // クラウド同期の瞬断は1回のリトライで通ることが多い
+      res = await post();
+    }
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).error || ''; } catch (_) {}
+      throw new Error(detail || ('HTTP ' + res.status));
+    }
   } catch (e) {
     if (prev) applySelection(c, prev);  // 失敗したら元に戻す
-    alert('確定の保存に失敗しました（サーバが終了している可能性）');
+    alert('確定の保存に失敗しました: ' + e.message);
   }
 }
 
@@ -1060,26 +1069,32 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True):
                 return
 
             if self.path == "/select-version":
-                slide = payload.get("slide", "")
-                rel_image = payload.get("image", "")
-                image = os.path.normpath(os.path.join(session_dir, rel_image))
-                # session_dir 配下の実在ファイルのみ許可
-                if not image.startswith(session_dir + os.sep) or not os.path.exists(image):
-                    self._respond_json({"ok": False, "error": "invalid image"}, 400)
-                    return
-                with manifest_lock:
-                    manifest = load_manifest(manifest_path)
-                    if slide not in manifest.get("slides", {}):
-                        self._respond_json({"ok": False, "error": "unknown slide"}, 404)
+                try:
+                    slide = payload.get("slide", "")
+                    rel_image = payload.get("image", "")
+                    image = os.path.normpath(os.path.join(session_dir, rel_image))
+                    # session_dir 配下の実在ファイルのみ許可
+                    if not image.startswith(session_dir + os.sep) or not os.path.exists(image):
+                        self._respond_json({"ok": False, "error": f"image not found: {rel_image}"}, 400)
                         return
-                    raw_candidate = os.path.join(os.path.dirname(image), "raw",
-                                                 os.path.basename(image))
-                    update_entry(manifest, slide, current_image=image, state="validated",
-                                 raw_image=raw_candidate if os.path.exists(raw_candidate)
-                                 else manifest["slides"][slide].get("raw_image"))
-                    save_manifest(manifest_path, manifest)
-                print(f"📌 確定版を変更: {slide} → {os.path.basename(image)}")
-                self._respond_json({"ok": True})
+                    with manifest_lock:
+                        manifest = load_manifest(manifest_path)
+                        if slide not in manifest.get("slides", {}):
+                            self._respond_json({"ok": False, "error": f"unknown slide: {slide}"}, 404)
+                            return
+                        raw_candidate = os.path.join(os.path.dirname(image), "raw",
+                                                     os.path.basename(image))
+                        update_entry(manifest, slide, current_image=image, state="validated",
+                                     raw_image=raw_candidate if os.path.exists(raw_candidate)
+                                     else manifest["slides"][slide].get("raw_image"))
+                        save_manifest(manifest_path, manifest)
+                    print(f"📌 確定版を変更: {slide} → {os.path.basename(image)}", flush=True)
+                    self._respond_json({"ok": True})
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    self._respond_json({"ok": False,
+                                        "error": f"{type(e).__name__}: {e}"}, 500)
                 return
 
             if self.path == "/import":
