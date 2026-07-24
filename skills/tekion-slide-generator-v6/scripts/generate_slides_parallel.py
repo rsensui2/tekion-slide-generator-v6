@@ -423,6 +423,14 @@ def main():
         except Exception as e:
             print(f"⚠️  ウォームアップをスキップ（{e}）。続行します。")
 
+    if ((os.environ.get("CODEX_SANDBOX") or os.environ.get("CODEX_THREAD_ID"))
+            and not args.with_dashboard and args.provider != 'mock'):
+        print("=" * 70)
+        print("⚠️  Codex 環境を検知しました。このサンドボックスでは別コマンドで立てた")
+        print("   ダッシュボードが生き残れません。--with-dashboard を付けて再実行すると、")
+        print("   生成の実況とレビュー受付がこのコマンド1つで完結します（強く推奨）")
+        print("=" * 70)
+
     dashboard = None
     if args.with_dashboard:
         try:

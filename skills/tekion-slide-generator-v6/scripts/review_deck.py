@@ -579,7 +579,7 @@ function applySelection(c, node) {
   c.querySelector('img.slide').src = node.dataset.src;
   c.querySelector('.viewing-label b').textContent = node.dataset.label;
   const dl = c.querySelector('a.tool.dl');
-  dl.href = node.dataset.src;
+  dl.href = node.dataset.orig;
   dl.download = node.dataset.file;
   const railImg = document.querySelector('.rail a[href="#' + c.id + '"] img');
   if (railImg) railImg.src = node.dataset.src;
@@ -593,7 +593,7 @@ async function selectVersion(node) {
   try {
     const res = await fetch('/select-version', { method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ slide: c.dataset.slide, image: node.dataset.src }) });
+      body: JSON.stringify({ slide: c.dataset.slide, image: node.dataset.orig }) });
     if (!res.ok) throw new Error(res.status);
   } catch (e) {
     if (prev) applySelection(c, prev);  // 失敗したら元に戻す
@@ -701,7 +701,7 @@ CARD_TEMPLATE = """    <article class="proof" id="p-__NAME__" data-slide="__NAME
           <img class="slide" src="__CUR_SRC__" alt="__NAME__" loading="lazy">
           <div class="tools">
             <span class="viewing-label">確定版: <b>__CUR_LABEL__</b></span>
-            <a class="tool dl" href="__CUR_SRC__" download="__CUR_FILE__">⤓ PNG保存</a>
+            <a class="tool dl" href="__CUR_ORIG__" download="__CUR_FILE__">⤓ PNG保存</a>
           </div>
         </div>
 __VTREE__
@@ -713,7 +713,7 @@ __VTREE__
       </div>
     </article>"""
 
-RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><span class="tag">__ORD__</span><img src="__CUR_SRC__" alt="__NAME__ サムネイル"></a>"""
+RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><span class="tag">__ORD__</span><img src="__RAIL_SRC__" alt="__NAME__ サムネイル"></a>"""
 
 PLACEHOLDER_CARD_TEMPLATE = """    <article class="proof placeholder" id="p-__NAME__" data-slide="__NAME__">
       <div class="head">
@@ -731,7 +731,12 @@ PLACEHOLDER_CARD_TEMPLATE = """    <article class="proof placeholder" id="p-__NA
 PLACEHOLDER_RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><span class="tag">__ORD__</span><div class="ph-thumb"></div></a>"""
 
 
-def build_html(session_dir: str) -> str:
+THUMB_MAIN_W = 1600   # メイン表示
+THUMB_VER_W = 480     # バージョンタイムライン
+THUMB_RAIL_W = 320    # 索引レール
+
+
+def build_html(session_dir: str, use_thumbs: bool = False) -> str:
     manifest_path = os.path.join(session_dir, "manifest.json")
     manifest = load_manifest(manifest_path)
     slides = manifest.get("slides", {})
@@ -767,7 +772,13 @@ def build_html(session_dir: str) -> str:
         versions = [v for v in (entry.get("versions") or [current]) if os.path.exists(v)]
         if current not in versions:
             versions.append(current)
+        from urllib.parse import quote as _q
         cur_rel = os.path.relpath(current, session_dir)
+
+        def disp(rel, w):
+            # 表示はサムネイル(serve時)、ダウンロード等は原本を使う
+            return f"thumb/{_q(rel)}?w={w}" if use_thumbs else rel
+
         cur_label = f"v{versions.index(current) + 1}"
 
         vnodes = []
@@ -777,10 +788,11 @@ def build_html(session_dir: str) -> str:
             if v == current:
                 classes += " current"
             vnodes.append(
-                f'          <button class="{classes}" data-src="{html.escape(rel)}" '
+                f'          <button class="{classes}" data-src="{html.escape(disp(rel, THUMB_MAIN_W))}" '
+                f'data-orig="{html.escape(rel)}" '
                 f'data-file="{html.escape(os.path.basename(v))}" data-label="v{i}" '
                 f'onclick="selectVersion(this)">'
-                f'<img src="{html.escape(rel)}" loading="lazy" alt="v{i}">'
+                f'<img src="{html.escape(disp(rel, THUMB_VER_W))}" loading="lazy" alt="v{i}">'
                 f'<span class="vmeta"><span class="vname">v{i}</span>'
                 f'<span class="badge">確定</span></span></button>')
 
@@ -794,7 +806,9 @@ def build_html(session_dir: str) -> str:
         subs = {
             "__NAME__": html.escape(base),
             "__ORD__": f"{ord_no:02d}",
-            "__CUR_SRC__": html.escape(cur_rel),
+            "__CUR_SRC__": html.escape(disp(cur_rel, THUMB_MAIN_W)),
+            "__RAIL_SRC__": html.escape(disp(cur_rel, THUMB_RAIL_W)),
+            "__CUR_ORIG__": html.escape(cur_rel),
             "__CUR_FILE__": html.escape(os.path.basename(current)),
             "__CUR_LABEL__": cur_label,
             "__BODY_CLASS__": " with-versions" if multi else "",
@@ -918,9 +932,52 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True):
             self.end_headers()
             self.wfile.write(body)
 
+        def _serve_thumb(self):
+            """表示用サムネイルを生成・キャッシュして返す（7MB級PNGをそのまま並べない）。"""
+            from urllib.parse import urlparse, parse_qs, unquote
+            import hashlib
+            parsed = urlparse(self.path)
+            rel = unquote(parsed.path[len("/thumb/"):])
+            width = 1600
+            try:
+                width = max(64, min(2560, int(parse_qs(parsed.query).get("w", ["1600"])[0])))
+            except (ValueError, TypeError):
+                pass
+            orig = os.path.normpath(os.path.join(session_dir, rel))
+            if not orig.startswith(session_dir + os.sep) or not os.path.exists(orig):
+                self.send_error(404)
+                return
+            cache_dir = os.path.join(session_dir, ".thumbs")
+            os.makedirs(cache_dir, exist_ok=True)
+            key = hashlib.sha1(f"{rel}|{width}|{int(os.path.getmtime(orig))}".encode()).hexdigest()
+            cached = os.path.join(cache_dir, f"{key}.jpg")
+            if not os.path.exists(cached):
+                from PIL import Image
+                with Image.open(orig) as img:
+                    img = img.convert("RGB")
+                    if img.width > width:
+                        img = img.resize((width, int(img.height * width / img.width)),
+                                         Image.LANCZOS)
+                    img.save(cached, format="JPEG", quality=82, optimize=True)
+            with open(cached, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
+            if self.path.startswith("/thumb/"):
+                try:
+                    self._serve_thumb()
+                except Exception as e:
+                    print(f"⚠️  thumb失敗: {e}")
+                    self.send_error(500)
+                return
             if self.path in ("/", "/review.html"):
-                body = build_html(session_dir).encode("utf-8")
+                body = build_html(session_dir, use_thumbs=True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -1097,6 +1154,9 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.serve:
+        if os.environ.get("CODEX_SANDBOX") or os.environ.get("CODEX_THREAD_ID"):
+            print("ℹ️  Codex 環境を検知: このサーバはバックグラウンド化するとコマンド終了時に"
+                  "殺されます。前面実行のまま送信を待つか、生成なら --with-dashboard を使ってください")
         return serve(args.session_dir, args.serve_timeout, open_browser=not args.no_open)
 
     out_path = args.output or os.path.join(args.session_dir, "review.html")
