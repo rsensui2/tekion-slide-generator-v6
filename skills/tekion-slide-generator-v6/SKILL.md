@@ -12,7 +12,7 @@ Markdown/テキストから日本語プレゼンスライド（16:9）を生成�
 | フルスロットル並列 | `--max-parallel auto` = 枚数ぶん一斉ファンアウト（上限20）。429検知で自動減速 |
 | ゼロ欠損保証 | manifest（台帳）+ 生成後の機械検証 + 検証スイープ + resume |
 | 直せる | 差分編集（現行画像参照）・赤ペン編集・バージョニング・ロールバック |
-| 同じ顔 | スタイルアンカー画像 + 構造化デザインシステムの全プロンプト同一注入 |
+| 同じ顔 | 構造化デザインシステムの全プロンプト同一注入（スタイルアンカーはオプトイン） |
 
 Codex を呼ぶコマンドの直前では `unset OPENAI_API_KEY` する（各 Phase のコマンドに含めてある。
 キーが残っていると公式仕様で API 従量課金に切り替わるため）。
@@ -184,10 +184,17 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_prompts_from_json.py" \
   --image-size 2K
 ```
 
-## Phase 5: スタイルアンカー生成（推奨・デッキ全体の一貫性）
+## Phase 5: スタイルアンカー生成（デフォルトでは作らない）
 
-デッキの「デザインの憲法」となる抽象デザインボードを1枚生成し、Phase 7 で全スライドの参照画像として渡す。
-図形と配色だけで構成し、文字は「Aa」1箇所だけ描かせる（文字サンプルを増やすと生成が420秒を超える・実測）:
+**デフォルトはスキップ。** Brand Design System の同一注入だけで一貫性は十分出る。
+参照画像には実測でデメリットがある（2026-07 マスター判断）:
+
+- アンカー生成自体が遅い（420秒タイムアウトが起きやすく、リトライで10分超になる）
+- 全スライドがアンカー画像に引っ張られ、「Aa」や配色スウォッチ等のアンカー要素が
+  本番スライドに混入することがある（実測: 12枚中4枚に混入）
+
+ユーザーが明示的に求めたときだけ、デッキの「デザインの憲法」となる抽象デザインボードを1枚生成し、
+Phase 7 で全スライドの参照画像として渡す。図形と配色だけで構成し、文字は「Aa」1箇所だけ描かせる:
 
 ```bash
 unset OPENAI_API_KEY 2>/dev/null
@@ -204,8 +211,8 @@ ${PYTHON} "${SKILL_DIR}/scripts/codex_app_server_client.py" \
   --image-size 2K --aspect 16:9 --backend auto --max-retries 2
 ```
 
-生成した `style_board.png` を Read で目視確認してから Phase 7 に渡す。
-少枚数（〜6枚）やスピード最優先時は省略してよい（デザインシステム注入だけでも一貫性は出る）。
+作った場合は `style_board.png` を Read で目視確認してから Phase 7 に渡し、生成後の各スライドに
+アンカー要素（「Aa」・スウォッチ）が混入していないか必ず目視チェックする。
 
 ## Phase 6: リファレンス画像マップ（任意）
 
@@ -232,12 +239,11 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
   --prompts-dir "${SESSION_DIR}/prompts" \
   --output-dir "${SESSION_DIR}/images" \
   --image-size 2K \
-  --logo "${SKILL_DIR}/assets/logo.png" \
-  --style-anchor "${SESSION_DIR}/style_board.png"
+  --logo "${SKILL_DIR}/assets/logo.png"
 ```
 
 - `--logo` は常に付与する（ユーザーが「ロゴ不要」と言ったときだけ外す）
-- スタイルアンカーを作らなかった場合は `--style-anchor` を外す
+- Phase 5 でスタイルアンカーを作った場合のみ `--style-anchor "${SESSION_DIR}/style_board.png"` を追加する
 - これ1コマンドで、枚数ぶんの一斉ファンアウト（上限20・429検知で自動減速）→ 生成毎の機械検証
   → 欠損分の検証スイープ（最大2ラウンド）まで自動で走り、結果は `${SESSION_DIR}/manifest.json` に記録される
 - **失敗・中断・認証エラー後は、同じコマンドをそのまま再実行する**（validated 済みはスキップされ、
