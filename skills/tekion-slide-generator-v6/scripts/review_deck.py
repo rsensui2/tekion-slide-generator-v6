@@ -1909,16 +1909,21 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
             want_port = int(f.read().strip())
     except (OSError, ValueError):
         pass
+    fallback = False
     try:
         httpd = ThreadingHTTPServer(("127.0.0.1", want_port), Handler)
     except OSError:  # 使用中・権限等 → 空きポートに退避
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        fallback = True
     port = httpd.server_address[1]
-    try:
-        with open(port_file, "w", encoding="utf-8") as f:
-            f.write(str(port))
-    except OSError:
-        pass
+    # 退避で開いた場合は記録を上書きしない（記録ポートには別のサーバが生きているか、
+    # タブがそのポートでの復帰を待っている可能性がある）
+    if not fallback:
+        try:
+            with open(port_file, "w", encoding="utf-8") as f:
+                f.write(str(port))
+        except OSError:
+            pass
     url = f"http://127.0.0.1:{port}/"
     print(f"🌐 スライドダッシュボードを開きます: {url}")
     if url_file:
