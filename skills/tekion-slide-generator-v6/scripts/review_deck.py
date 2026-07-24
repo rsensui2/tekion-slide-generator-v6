@@ -772,6 +772,9 @@ THUMB_RAIL_W = 320    # 索引レール
 
 
 def build_html(session_dir: str, use_thumbs: bool = False) -> str:
+    # Google Drive 等は同一フォルダに複数のパス表記（マイドライブ/My Drive等）があるため、
+    # 実体パスに正規化してから相対パスを計算する
+    session_dir = os.path.realpath(os.path.abspath(session_dir))
     manifest_path = os.path.join(session_dir, "manifest.json")
     manifest = load_manifest(manifest_path)
     slides = manifest.get("slides", {})
@@ -808,7 +811,27 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
         if current not in versions:
             versions.append(current)
         from urllib.parse import quote as _q
-        cur_rel = os.path.relpath(current, session_dir)
+        # クラウド同期フォルダは同一実体に複数のパス表記を持ち得るため（Google Drive の
+        # My Drive/マイドライブ等）、パス文字列の相対化はせず「images/<basename>」で解決する
+        images_dir = os.path.join(session_dir, "images")
+
+        def rel_image(p):
+            cand = os.path.join("images", os.path.basename(p))
+            if os.path.exists(os.path.join(session_dir, cand)):
+                return cand
+            return os.path.relpath(os.path.realpath(p), session_dir)
+
+        seen_names = set()
+        uniq = []
+        for v in versions:
+            name = os.path.basename(v)
+            if name not in seen_names:
+                seen_names.add(name)
+                uniq.append(v)
+        versions = uniq
+        if os.path.basename(current) not in seen_names:
+            versions.append(current)
+        cur_rel = rel_image(current)
 
         def disp(rel, w):
             # 表示はサムネイル(serve時)、ダウンロード等は原本を使う
@@ -825,7 +848,7 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
         vnodes = []
         for v in versions:
             i = vnum(v)
-            rel = os.path.relpath(v, session_dir)
+            rel = rel_image(v)
             classes = "vnode"
             if v == current:
                 classes += " current"
@@ -941,7 +964,7 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True):
     """
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-    session_dir = os.path.abspath(session_dir)
+    session_dir = os.path.realpath(os.path.abspath(session_dir))
     manifest_path = os.path.join(session_dir, "manifest.json")
     feedback_path = os.path.join(session_dir, "slide_feedback.json")
     received = threading.Event()
