@@ -23,7 +23,17 @@ Codex を呼ぶコマンドの直前では `unset OPENAI_API_KEY` する（各 P
 mode: auto  # Pre-flight〜Phase 9を承認なしで連続実行
 pause_only_on: [route_ambiguous, codex_not_logged_in]
 chain_commands: true  # bashは && で連結
+speed_first: true  # 下記「立ち上がりを速くする」を守る
 ```
+
+**立ち上がりを速くする**（ユーザーはダッシュボードに最初のスライドが出るまでの時間で体感する）:
+- 読むのは SKILL.md だけでよい。references/（architecture・troubleshooting・quality-checklist 等）は
+  トラブル時や品質チェック時に必要になってから読む
+- アクティブプリセットがあれば design_guidelines はコピーのみ（執筆しない）。無い場合も
+  テンプレートの Brand Design System の値を差し替える程度に留め、ゼロから書き起こさない
+- Phase 1（ダッシュボード起動）を最優先で実行してから Phase 2 以降を考える。
+  ユーザーが待っている間、画面に実況が出ていることが最重要
+- slides_plan.json は1パスで書き切る（下書き→推敲の往復をしない）
 
 ## 定数
 
