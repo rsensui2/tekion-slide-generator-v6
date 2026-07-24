@@ -176,7 +176,27 @@ def next_version_path(images_dir: str, slide_base: str, versions: list) -> tuple
     return os.path.join(images_dir, f"{slide_base}_v{n}.png"), n
 
 
-_VERSION_RE = None
+def ordered_bases(manifest: dict, include_removed: bool = False) -> list:
+    """表示・エクスポートで使うスライドの並び順を返す。
+
+    ダッシュボードでの並べ替え結果（manifest の slide_order）を最優先し、
+    リストに無いスライドは従来の自然順（course_title 先頭）で末尾に続ける。
+    ダッシュボードで削除されたスライド（state=removed）は既定で除外する。
+    """
+    import re
+    slides = manifest.get("slides", {})
+
+    def natural_key(s: str):
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"([0-9]+)", s)]
+
+    order = [b for b in manifest.get("slide_order", []) if b in slides]
+    seen = set(order)
+    rest = sorted((b for b in slides if b not in seen),
+                  key=lambda b: (0 if "course_title" in b else 1, natural_key(b)))
+    bases = order + rest
+    if not include_removed:
+        bases = [b for b in bases if slides[b].get("state") != "removed"]
+    return bases
 
 
 def collect_current_images(manifest_path: str, allow_partial: bool = False):
@@ -185,32 +205,26 @@ def collect_current_images(manifest_path: str, allow_partial: bool = False):
     「ディレクトリの最新ファイル」ではなく「検証済みと記録された版」を返すため、
     失敗版・古い版・raw が混入しない。未完成スライドがあれば allow_partial で
     ない限り None を返す（部分デッキを「成功」として出力しないため）。
+    並び順はダッシュボードの並べ替え（slide_order）を反映し、削除済みは含めない。
     """
-    import re
-    global _VERSION_RE
-    if _VERSION_RE is None:
-        _VERSION_RE = re.compile(r'^(.+_\d+)(?:_v(\d+))?$')
-
     with open(manifest_path, "r", encoding="utf-8") as f:
         manifest = json.load(f)
 
     slides = manifest.get("slides", {})
-    incomplete = sorted(base for base, e in slides.items()
-                        if e.get("state") != "validated" or not e.get("current_image"))
+    bases = ordered_bases(manifest)
+    incomplete = sorted(b for b in bases
+                        if slides[b].get("state") != "validated"
+                        or not slides[b].get("current_image"))
     if incomplete and not allow_partial:
         return None, incomplete
 
-    def natural_key(s: str):
-        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"([0-9]+)", s)]
-
     files = []
-    for base, entry in slides.items():
+    for base in bases:
+        entry = slides[base]
         img = entry.get("current_image")
         if entry.get("state") == "validated" and img and os.path.exists(img):
-            files.append((base, img))
-
-    files.sort(key=lambda item: (0 if "course_title" in item[0] else 1, natural_key(item[0])))
-    return [img for _, img in files], incomplete
+            files.append(img)
+    return files, incomplete
 
 
 def set_session_status(session_dir: str, stage: str, detail: str = "", total=None) -> None:

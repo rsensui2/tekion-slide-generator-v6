@@ -31,7 +31,8 @@ import sys
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from manifest_utils import load_manifest, read_session_status, save_manifest, update_entry
+from manifest_utils import (load_manifest, ordered_bases, read_session_status,
+                            save_manifest, update_entry)
 
 PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="ja">
@@ -201,7 +202,31 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   article.proof.has-ink { border-color: var(--red); }
 
   .proof .head {
-    display: flex; align-items: baseline; gap: 14px; padding: 18px 24px 12px;
+    display: flex; align-items: center; gap: 14px; padding: 16px 24px 12px;
+  }
+  .headtools { display: flex; gap: 6px; margin-left: 14px; }
+  .hbtn {
+    width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line); background: var(--paper); color: var(--sub);
+    border-radius: 8px; cursor: pointer; font-size: 13px; font-family: inherit;
+    padding: 0; line-height: 1; transition: border-color .15s, color .15s;
+  }
+  .hbtn:hover { border-color: rgba(255,90,0,.45); color: var(--orange-dark); }
+  .hbtn.del:hover { border-color: var(--red); color: var(--red); background: var(--red-tint); }
+  .rail a[draggable="true"] { cursor: grab; }
+  .rail a.dragging { opacity: .35; }
+  #undo-toast {
+    display: none; position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 24px; z-index: 60; align-items: center; gap: 14px;
+    background: var(--ink-dark); color: #fff; border-radius: 999px;
+    padding: 10px 10px 10px 22px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 20px 40px -12px rgba(0,0,0,.5);
+  }
+  #undo-toast.show { display: flex; }
+  #undo-toast button {
+    border: 0; background: var(--grad); color: #fff; font-weight: 700;
+    border-radius: 999px; padding: 8px 18px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px;
   }
   .proof .ord {
     font-family: "Space Grotesk", sans-serif;
@@ -596,6 +621,7 @@ __SITES_LOGO__<a href="https://tekion.jp" target="_blank" rel="noopener">tekion.
 </div></div>
 
 <button id="reload-banner" onclick="location.reload()">デッキが更新されました — 再読み込み</button>
+<div id="undo-toast"><span id="undo-msg">スライドを削除しました</span><button onclick="undoDelete()">元に戻す</button></div>
 <div id="drop-overlay"><div class="box">ここにドロップして読み込み<br>
 <small>.pptx / .pdf は1枚ずつのスライドに分解 / PNG・JPG は1枚のスライドとして追加</small></div></div>
 
@@ -604,14 +630,17 @@ __SITES_LOGO__<a href="https://tekion.jp" target="_blank" rel="noopener">tekion.
 </footer>
 
 <script>
-const TOTAL = __COUNT__;
+let TOTAL = __COUNT__;
 const SESSION_DIR = __SESSION_DIR_JSON__;
 const SERVED = location.protocol.startsWith('http');
 if (!SERVED) {
   ['dl-pptx', 'dl-pdf'].forEach(id => document.getElementById(id).style.display = 'none');
   document.querySelectorAll('.slip .send').forEach(b => b.style.display = 'none');
+  // file:// では /home も並べ替え・削除の保存もできない
+  document.querySelectorAll('.headtools').forEach(t => t.style.display = 'none');
+  document.querySelectorAll('.rail a[draggable]').forEach(a => a.removeAttribute('draggable'));
   const brand = document.getElementById('brand-link');
-  if (brand) brand.removeAttribute('href');  // file:// では /home が無い
+  if (brand) brand.removeAttribute('href');
 }
 /* --- 生成実況: /status をポーリングして進捗表示・自動更新 --- */
 let lastSig = null;
@@ -669,7 +698,8 @@ async function pollStatus() {
     if (lastSig === null) { lastSig = sig; return; }
     if (sig !== lastSig) {
       lastSig = sig;
-      if (!hasUserInput()) location.reload();
+      // 入力中・アンドゥ表示中は自動リロードしない（書きかけ・取り消し導線を守る）
+      if (!hasUserInput() && !undoPending) location.reload();
       else document.getElementById('reload-banner').classList.add('show');
     }
     pollFails = 0;
@@ -807,6 +837,130 @@ async function selectVersion(node) {
 /* --- 索引レールのスクロール連動 --- */
 const railMap = {};
 document.querySelectorAll('.rail a').forEach(a => railMap[a.getAttribute('href').slice(1)] = a);
+
+/* --- 並べ替え（カードの↑↓ / レールのドラッグ&ドロップ） --- */
+function renumber() {
+  [...document.querySelectorAll('main article.proof')].forEach((a, i) => {
+    const ord = String(i + 1).padStart(2, '0');
+    const o = a.querySelector('.ord'); if (o) o.textContent = ord;
+    const ph = a.querySelector('.ph-num'); if (ph) ph.textContent = ord;
+    const railItem = railMap[a.id];
+    if (railItem) {
+      railItem.dataset.ord = ord;
+      const tag = railItem.querySelector('.tag');
+      if (tag && !railItem.classList.contains('has-ink')) tag.textContent = ord;
+    }
+  });
+}
+async function postOrder() {
+  if (!SERVED) return;
+  const order = [...document.querySelectorAll('main article.proof')].map(a => a.dataset.slide);
+  try {
+    const res = await fetch('/reorder', { method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ order }) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+  } catch (e) {
+    alert('並び順の保存に失敗しました: ' + e.message + '\\n再読み込みして確認してください。');
+  }
+}
+function moveSlide(btn, dir) {
+  const c = card(btn);
+  const sib = dir < 0 ? c.previousElementSibling : c.nextElementSibling;
+  if (!sib || !sib.classList.contains('proof')) return;
+  c.parentNode.insertBefore(c, dir < 0 ? sib : sib.nextSibling);
+  const r = railMap[c.id], rs = railMap[sib.id];
+  if (r && rs) r.parentNode.insertBefore(r, dir < 0 ? rs : rs.nextSibling);
+  renumber(); postOrder();
+  c.scrollIntoView({ block: 'nearest' });
+}
+let dragSrc = null;
+function bindRailDrag() {
+  if (!SERVED) return;
+  document.querySelectorAll('.rail a[draggable]').forEach(a => {
+    a.addEventListener('dragstart', e => {
+      dragSrc = a; e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', a.getAttribute('href')); } catch (_) {}
+      a.classList.add('dragging');
+    });
+    a.addEventListener('dragover', e => {
+      if (!dragSrc || dragSrc === a) return;
+      e.preventDefault();
+      const rect = a.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      a.parentNode.insertBefore(dragSrc, before ? a : a.nextSibling);
+    });
+    a.addEventListener('dragend', () => {
+      if (!dragSrc) return;
+      dragSrc.classList.remove('dragging'); dragSrc = null;
+      // レールの並び順に合わせて本文カードも並べ替える
+      const main = document.querySelector('main');
+      [...document.querySelectorAll('.rail a[draggable]')].forEach(x => {
+        const art = document.getElementById(x.getAttribute('href').slice(1));
+        if (art) main.appendChild(art);
+      });
+      renumber(); postOrder();
+    });
+  });
+}
+bindRailDrag();
+
+/* --- 削除（ソフトデリート + 元に戻す） --- */
+let undoPending = null;
+let undoTimer = null;
+async function deleteSlide(btn) {
+  const c = card(btn);
+  const base = c.dataset.slide;
+  const railItem = railMap[c.id];
+  const memo = { card: c, railItem, nextCard: c.nextElementSibling,
+                 nextRail: railItem ? railItem.nextElementSibling : null,
+                 base, hadImage: !c.classList.contains('placeholder') };
+  c.remove(); if (railItem) railItem.remove();
+  if (memo.hadImage) TOTAL--;
+  renumber(); updateTally();
+  try {
+    const res = await fetch('/delete-slide', { method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ slide: base }) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    undoPending = memo;
+    document.getElementById('undo-msg').textContent = base + ' を削除しました';
+    document.getElementById('undo-toast').classList.add('show');
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(() => {
+      document.getElementById('undo-toast').classList.remove('show');
+      undoPending = null;
+    }, 8000);
+  } catch (e) {
+    restoreDom(memo);
+    alert('削除に失敗しました: ' + e.message);
+  }
+}
+function restoreDom(memo) {
+  const main = document.querySelector('main');
+  if (memo.nextCard && memo.nextCard.isConnected) main.insertBefore(memo.card, memo.nextCard);
+  else main.appendChild(memo.card);
+  const rail = document.querySelector('nav.rail');
+  if (memo.railItem && rail) {
+    if (memo.nextRail && memo.nextRail.isConnected) rail.insertBefore(memo.railItem, memo.nextRail);
+    else rail.appendChild(memo.railItem);
+  }
+  if (memo.hadImage) TOTAL++;
+  renumber(); updateTally();
+}
+async function undoDelete() {
+  if (!undoPending) return;
+  const memo = undoPending;
+  undoPending = null;
+  clearTimeout(undoTimer);
+  document.getElementById('undo-toast').classList.remove('show');
+  try {
+    const res = await fetch('/restore-slide', { method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ slide: memo.base }) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    restoreDom(memo);
+  } catch (e) {
+    alert('復元に失敗しました: ' + e.message);
+  }
+}
 const spy = new IntersectionObserver(entries => {
   entries.forEach(e => {
     if (!e.isIntersecting) return;
@@ -828,9 +982,12 @@ function markCard(el) {
     railItem.classList.toggle('has-ink', inked);
     railItem.querySelector('.tag').textContent = inked ? '修正' : railItem.dataset.ord;
   }
+  updateTally();
+}
+function updateTally() {
   const n = document.querySelectorAll('.proof.has-ink').length;
   document.getElementById('n-ink').textContent = n;
-  document.getElementById('n-ok').textContent = TOTAL - n;
+  document.getElementById('n-ok').textContent = Math.max(0, TOTAL - n);
 }
 function freeze(message) {
   submitted = true;
@@ -898,6 +1055,11 @@ CARD_TEMPLATE = """    <article class="proof" id="p-__NAME__" data-slide="__NAME
         <span class="ord">__ORD__</span>
         <span class="id mono">__NAME__</span>
         <span class="state">校了</span>
+        <span class="headtools">
+          <button class="hbtn" onclick="moveSlide(this,-1)" title="1つ上へ" aria-label="1つ上へ">↑</button>
+          <button class="hbtn" onclick="moveSlide(this,1)" title="1つ下へ" aria-label="1つ下へ">↓</button>
+          <button class="hbtn del" onclick="deleteSlide(this)" title="このスライドを削除" aria-label="このスライドを削除">🗑</button>
+        </span>
       </div>
       <div class="body__BODY_CLASS__">
         <div class="maincol">
@@ -916,7 +1078,7 @@ __VTREE__
       </div>
     </article>"""
 
-RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><span class="tag">__ORD__</span><img src="__RAIL_SRC__" alt="__NAME__ サムネイル"></a>"""
+RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__" draggable="true" title="ドラッグで並べ替え"><span class="tag">__ORD__</span><img src="__RAIL_SRC__" alt="__NAME__ サムネイル"></a>"""
 
 PLACEHOLDER_CARD_TEMPLATE = """    <article class="proof placeholder" id="p-__NAME__" data-slide="__NAME__">
       <div class="head">
@@ -931,7 +1093,7 @@ PLACEHOLDER_CARD_TEMPLATE = """    <article class="proof placeholder" id="p-__NA
       </div>
     </article>"""
 
-PLACEHOLDER_RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><span class="tag">__ORD__</span><div class="ph-thumb"></div></a>"""
+PLACEHOLDER_RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__" draggable="true" title="ドラッグで並べ替え"><span class="tag">__ORD__</span><div class="ph-thumb"></div></a>"""
 
 
 THUMB_MAIN_W = 1600   # メイン表示
@@ -977,12 +1139,8 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
     manifest = load_manifest(manifest_path)
     slides = manifest.get("slides", {})
 
-    def natural_key(s: str):
-        import re
-        return [int(t) if t.isdigit() else t.lower() for t in re.split(r"([0-9]+)", s)]
-
-    ordered = sorted(slides.items(),
-                     key=lambda kv: (0 if "course_title" in kv[0] else 1, natural_key(kv[0])))
+    # 並び順: ダッシュボードでの並べ替え（slide_order）優先・削除済みは出さない
+    ordered = [(b, slides[b]) for b in ordered_bases(manifest)]
 
     cards, rail = [], []
     rendered_total = 0
@@ -1301,6 +1459,8 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                 items = []
                 for base, e in slides.items():
                     state = e.get("state", "unknown")
+                    if state == "removed":
+                        continue  # 削除済みは進捗・件数に含めない
                     counts[state] = counts.get(state, 0) + 1
                     items.append({"base": base, "state": state,
                                   "versions": len(e.get("versions") or [])})
@@ -1378,6 +1538,44 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                     traceback.print_exc()
                     self._respond_json({"ok": False,
                                         "error": f"{type(e).__name__}: {e}"}, 500)
+                return
+
+            if self.path == "/reorder":
+                order = payload.get("order")
+                if not isinstance(order, list):
+                    self._respond_json({"ok": False, "error": "order must be a list"}, 400)
+                    return
+                with manifest_lock:
+                    manifest = load_manifest(manifest_path)
+                    known = manifest.get("slides", {})
+                    manifest["slide_order"] = [b for b in order if b in known]
+                    save_manifest(manifest_path, manifest)
+                print(f"↕️  並び順を保存: {len(order)}枚", flush=True)
+                self._respond_json({"ok": True})
+                return
+
+            if self.path in ("/delete-slide", "/restore-slide"):
+                slide = payload.get("slide", "")
+                restore = self.path == "/restore-slide"
+                with manifest_lock:
+                    manifest = load_manifest(manifest_path)
+                    entry = manifest.get("slides", {}).get(slide)
+                    if not entry:
+                        self._respond_json({"ok": False, "error": f"unknown slide: {slide}"}, 404)
+                        return
+                    if restore:
+                        update_entry(manifest, slide,
+                                     state=entry.get("state_before_removal", "validated"))
+                    else:
+                        # ソフトデリート: 画像はディスクに残し、表示・エクスポート・
+                        # 再生成の対象から外す（「元に戻す」で復元できる）
+                        update_entry(manifest, slide,
+                                     state_before_removal=entry.get("state", "validated"),
+                                     state="removed")
+                    save_manifest(manifest_path, manifest)
+                print(("↩️  スライドを復元: " if restore else "🗑  スライドを削除（復元可）: ")
+                      + slide, flush=True)
+                self._respond_json({"ok": True})
                 return
 
             if self.path == "/import":

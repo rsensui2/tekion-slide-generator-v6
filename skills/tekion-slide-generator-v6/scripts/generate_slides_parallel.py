@@ -259,6 +259,10 @@ def build_tasks(prompt_files, args, manifest, images_dir, raw_dir,
         p_hash = prompt_hash(prompt, extra=os.path.basename(anchor) if anchor else "")
 
         entry = get_entry(manifest, slide_base)
+        # ダッシュボードで削除されたスライドは再生成で復活させない（--force は例外）
+        if entry.get('state') == 'removed' and not args.force:
+            skipped += 1
+            continue
         # resume 判定: validated 済み・プロンプト未変更・実ファイルも健在ならスキップ
         if (not args.force
                 and entry.get('state') == 'validated'

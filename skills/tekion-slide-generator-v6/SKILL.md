@@ -315,6 +315,10 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
 ```
 
+ダッシュボード上でユーザーは修正指示のほか、スライドの並べ替え（カードの↑↓・レールのドラッグ）と
+削除（🗑 = ソフトデリート、manifest の state=removed）も直接できる。並び順は manifest の
+`slide_order` に保存され、表示・PPTX/PDF エクスポートに自動反映される。削除済みスライドは
+再生成でも復活しない（`--force` 時のみ復活）。
 ユーザーがブラウザで「修正を依頼する」を押した瞬間にこのプロセスが完了する。
 完了通知を受けたら `${SESSION_DIR}/slide_feedback.json` を Read し
 （`{"feedback": {"02_solution_02": "修正指示", ...}}` 形式）、エントリごとに下の差分編集を
