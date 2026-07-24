@@ -20,6 +20,7 @@ manifest が保存されるたびに upsert されるため、どのフォルダ
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -104,6 +105,31 @@ def upsert(session_dir: str, manifest: dict | None = None) -> None:
             (session_dir, title, slides, now, now))
 
 
+def session_id(session_dir: str) -> str:
+    """実体パスから、URL に使う安定したセッション ID を返す。"""
+    real = os.path.realpath(os.path.abspath(session_dir))
+    return hashlib.sha1(real.encode("utf-8")).hexdigest()[:12]
+
+
+def resolve_session_id(sid: str) -> str | None:
+    """台帳から sid を逆引きする。
+
+    sid はパスそのものを公開しないための識別子であり、台帳に登録済みで
+    manifest.json が現在も存在するセッションだけを返す。万一 12 桁 SID が
+    衝突した場合は、誤ったセッションを配信しないよう解決失敗にする。
+    """
+    if not re.fullmatch(r"[0-9a-f]{12}", sid or ""):
+        return None
+    with _conn() as conn:
+        rows = conn.execute("SELECT path FROM sessions").fetchall()
+    matches = []
+    for (path,) in rows:
+        real = os.path.realpath(os.path.abspath(path))
+        if session_id(real) == sid and os.path.isfile(os.path.join(real, "manifest.json")):
+            matches.append(real)
+    return matches[0] if len(set(matches)) == 1 else None
+
+
 def list_sessions(query: str | None = None, days: int | None = None, limit: int = 30) -> list[dict]:
     sql = "SELECT path, title, slides, created_at, updated_at FROM sessions"
     cond, params = [], []
@@ -121,7 +147,7 @@ def list_sessions(query: str | None = None, days: int | None = None, limit: int 
         rows = conn.execute(sql, params).fetchall()
     result = []
     for path, title, slides, created, updated in rows:
-        result.append({"path": path, "title": title, "slides": slides,
+        result.append({"path": path, "sid": session_id(path), "title": title, "slides": slides,
                        "created_at": created, "updated_at": updated,
                        "exists": os.path.exists(os.path.join(path, "manifest.json"))})
     return result
@@ -168,7 +194,7 @@ def main() -> int:
 
     if args.register:
         upsert(args.register)
-        print(f"registered: {args.register}")
+        print(session_id(args.register))
         return 0
     if args.scan:
         total = sum(scan(r) for r in args.scan)

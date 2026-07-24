@@ -95,36 +95,43 @@ TIMESTAMP=$(date +%Y-%m-%d_%H%M%S) && OUTPUT_DIR="[指定された出力先]" &&
 Google Drive / Dropbox 等のクラウド同期フォルダ配下は、同期による manifest の巻き戻り・
 書き込み瞬断が起きるため不可。完成した PPTX/PDF だけを最後にクラウドへコピーする。
 
-続けて**スライドダッシュボードを起動**する。`--serve` はユーザーが「修正を依頼する」を
-押すまで戻らないブロッキングプロセス。エージェントごとの正しい起動方法:
-
-- **Claude Code**: 2つのバックグラウンドプロセス（いずれも `run_in_background: true`）に分ける。
-  こうするとダッシュボードのタブが死なず、修正完了のたびに**同じタブが自動更新**される:
-  1. サーバ本体（常駐。修正指示を受信しても終了しない。以後開き直さない）
-  2. 待ち受け（軽量。**この完了通知 = 修正指示の受信**。stdout に slide_feedback.json の内容が出る）
-  編集が終わったら **2 の待ち受けだけを再起動**する（サーバとタブはそのまま）
-- **Codex ほか**（サンドボックスがコマンド終了時に子プロセスを殺す環境。nohup も生き残れない）:
-  Phase 1 ではサーバを起動しない。**新規生成では Phase 7 に `--with-dashboard` を付ける**
-  （生成・実況・レビュー待ちが1つの前面コマンドで完結する）。取り込み改修では
-  `review_deck.py --serve` を前面実行する（送信で exit 0 → `slide_feedback.json` を読む）
+続けてセッションを台帳へ登録し、常駐ハブの固定 URL を得る:
 
 ```bash
-# Claude Code: サーバ常駐（1）と待ち受け（2）を別々のバックグラウンドタスクで
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve --persist --serve-timeout 28800
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
-
-# Codex ほか（前面実行。送信で exit 0）
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
+SID=$(${PYTHON} "${SKILL_DIR}/scripts/session_registry.py" --register "${SESSION_DIR}")
+PORT="${TEKION_DASHBOARD_PORT:-7799}"
+HUB_URL="http://127.0.0.1:${PORT}"
+DECK_URL="${HUB_URL}/s/${SID}/"
+curl -fsS "${HUB_URL}/healthz"
 ```
 
-**どのブラウザで見せるか** — 自分が内蔵ブラウザを操作できる環境なら、そちらで開くと
-ユーザーはエージェントの画面内で完結できる:
+healthz の `version` が現在のプラグイン（`${SKILL_DIR}/../../.codex-plugin/plugin.json`）と違う場合も
+「停止中」と同じ扱いにして、インストーラを再実行すると最新ランタイムへコピー・再起動される。
+healthz が失敗した場合、または version が違う場合:
 
-- **Claude Code デスクトップ版**（内蔵ブラウザペインあり）/ **Codex**（アプリ内 Browser あり）:
-  `--serve --no-open` で起動し、ログに出る `http://127.0.0.1:<port>/` を内蔵ブラウザで開く
-- **VS Code 版 / CLI**（内蔵ブラウザなし）: `--serve` のまま実行（OS の既定ブラウザが自動で開く）
+- **Claude Code**: `bash "${SKILL_DIR}/scripts/install_hub.sh"` を1回実行する
+- **Codex**: ユーザーに「ターミナルで `bash <skill>/scripts/install_hub.sh` を1回実行してください
+  （初回のみ）」と案内する。起動までのフォールバックは従来の
+  `review_deck.py --serve`（前面）または Phase 7 の `--with-dashboard`
 
-ブラウザにスタート画面が開き、ユーザーは2つの入り口を選べる:
+**ブラウザは会話の最初の1回だけ開く**。タスク開始時に次を1回だけ確認する:
+
+```bash
+curl -fsS "${DECK_URL}viewers"
+```
+
+- `{"active": false}`: Claude は `open "${DECK_URL}"`、Codex はアプリ内 Browser で開くか URL を提示する
+- `{"active": true}`: 既にユーザーが見ているため何も開かない
+- 同じタスク中は、生成・修正後も二度と開き直さない。表示中のタブが `/status` のポーリングで反映を拾う
+
+修正指示の待ち受けはサーバと独立したファイル監視で行う。Claude はバックグラウンド、
+Codex は前面で実行し、編集後は待ち受けだけを再起動する:
+
+```bash
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
+```
+
+固定ハブ `http://127.0.0.1:7799/` のスタート画面では、ユーザーは2つの入り口を選べる:
 
 - **既存デッキを読み込む**: ユーザーが PPTX/PDF/画像をドロップ → 1枚ずつのスライドに分解されて
   スライドダッシュボードに並ぶ。この場合 Phase 2〜7 は不要で、そのまま Phase 8（赤入れ → 差分編集）に入る
@@ -304,10 +311,10 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
   --logo "${LOGO}"
 ```
 
-**Codex 等（Phase 1 でサーバを常駐できなかった環境）は `--with-dashboard` を付ける**:
-生成前にダッシュボードが起動して実況が見え、生成後はレビュー送信までコマンドがブロックする。
-送信で exit したら出力の「フィードバック受信」と `slide_feedback.json` を読んで Phase 8 へ
-（`--dashboard-timeout` 既定 7200 秒。内蔵ブラウザで開くなら `--dashboard-no-open`）。
+固定ハブが稼働していれば `--with-dashboard` は不要。ハブが manifest をポーリングして実況する。
+ハブ未導入・停止中のフォールバックでだけ `--with-dashboard` を付ける。生成前に従来サーバが
+起動し、生成後はレビュー送信までブロックする（`--dashboard-timeout` 既定 7200 秒。
+内蔵ブラウザで開くなら `--dashboard-no-open`）。
 
 - `resolve_brand.py` がアクティブプリセットの `<slug>.config.json` から `LOGO` /
   `SLIDE_LOGO_POSITION` / `SLIDE_LOGO_SCALE`（/ `SLIDE_FOOTER_TEXT`）を解決する
@@ -331,16 +338,15 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
 
 ## Phase 8: レビュー → 差分編集
 
-デッキをブラウザレビューア「スライドダッシュボード」で開き、ユーザーにスライド単位でフィードバックをもらう。
-Phase 1 の常駐サーバが生きていれば開き直しは不要 — **待ち受けだけを起動する**。
-サーバが無い場合（過去セッションの再開等）は `--serve --persist` で開いてから待ち受けを起動する:
+固定ハブの同じタブで、ユーザーにスライド単位のフィードバックをもらう。
+**ブラウザもサーバも開き直さず、待ち受けだけを起動する**:
 
 ```bash
-# Claude Code（いずれも run_in_background: true）
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
-# Codex ほか（前面実行）
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
 ```
+
+ハブが無い環境では、従来どおり `review_deck.py --serve`（前面）または
+`--serve --persist` + `--await-feedback` をフォールバックとして使える。
 
 ダッシュボード上でユーザーは修正指示のほか、スライドの並べ替え（カードの↑↓・レールのドラッグ）と
 削除（🗑 = ソフトデリート、manifest の state=removed）も直接できる。並び順は manifest の
@@ -423,8 +429,8 @@ ${PYTHON} "${SKILL_DIR}/scripts/export_to_pdf.py" \
 ```bash
 ${PYTHON} "${SKILL_DIR}/scripts/session_registry.py" --list --query "シンデレラ"   # 名前で検索
 ${PYTHON} "${SKILL_DIR}/scripts/session_registry.py" --list --days 7               # 日数で絞り込み
-# 出力された path でダッシュボードを開き直す（resume・履歴・書き出し全て有効）
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "<path>" --serve
+# 台帳の path を --register に渡すと固定ハブ URL 用 SID が得られる
+${PYTHON} "${SKILL_DIR}/scripts/session_registry.py" --register "<path>"
 ```
 
 スタート画面にも「RECENT SESSIONS」として直近8件が表示され、「開く」でその場で再開できる。
