@@ -72,6 +72,13 @@ def parse_args():
                         help='1スライド生成の上限秒（未指定: gemini/openai=240, codex=600, mock=60）')
     parser.add_argument('--logo', help='Logo image path to include in each slide generation')
     parser.add_argument('--image-size', default='2K', choices=['512px', '1K', '2K', '4K'], help='Output resolution (default: 2K)')
+    parser.add_argument('--with-dashboard', action='store_true',
+                        help='生成と同一プロセスでダッシュボードを起動し、生成後はレビュー送信まで待つ'
+                             '（サンドボックスが子プロセスを殺す環境=Codex等での推奨。1コマンドで実況+レビューが完結）')
+    parser.add_argument('--dashboard-no-open', action='store_true',
+                        help='[with-dashboard] OSブラウザを自動で開かない（内蔵ブラウザで開く場合用）')
+    parser.add_argument('--dashboard-timeout', type=int, default=7200,
+                        help='[with-dashboard] レビュー待ちの上限秒（デフォルト: 7200）')
     parser.add_argument('--style-anchor',
                         help='スタイルアンカー画像（全スライドに参照画像として渡し、デッキ全体の一貫性を担保）')
     # Gemini固有
@@ -416,6 +423,18 @@ def main():
         except Exception as e:
             print(f"⚠️  ウォームアップをスキップ（{e}）。続行します。")
 
+    dashboard = None
+    if args.with_dashboard:
+        try:
+            from review_deck import start_server
+            dashboard = start_server(os.path.dirname(manifest_path),
+                                     timeout=args.dashboard_timeout,
+                                     open_browser=not args.dashboard_no_open)
+            threading.Thread(target=dashboard.httpd.serve_forever, daemon=True).start()
+            print(f"📊 ダッシュボード: {dashboard.url}（生成の実況が見えます）")
+        except Exception as e:
+            print(f"⚠️  ダッシュボード起動失敗（生成は続行）: {e}")
+
     gate = AdaptiveGate(initial=initial_parallel, cap=args.parallel_cap)
     abort_event = threading.Event()
     start_time = time.time()
@@ -474,6 +493,26 @@ def main():
     set_session_status(session_dir_for_status,
                        "attention" if failed or abort_event.is_set() else "done",
                        "一部スライドが未完成（再実行で回収されます）" if failed else "全スライド生成完了")
+
+    if dashboard is not None:
+        # 生成に時間を使った分レビュー時間が削れないよう、タイマーを張り直す
+        dashboard.timer.cancel()
+        print(f"\n📊 レビュー待ち: {dashboard.url}")
+        print("   ダッシュボードで赤入れして「修正を依頼する」を押すと、このコマンドが終了します")
+        try:
+            dashboard.received.wait(timeout=args.dashboard_timeout)
+        except KeyboardInterrupt:
+            pass
+        if not dashboard.received.is_set():
+            print("⏰ レビュー待ちタイムアウト")
+        try:
+            dashboard.httpd.shutdown()
+        except Exception:
+            pass
+        from review_deck import report_feedback
+        rc = report_feedback(dashboard)
+        if rc == 0:
+            print("   → slide_feedback.json を読んで差分編集に進んでください")
 
     if failed:
         print("\n⚠️  未完成のスライドがあります:")

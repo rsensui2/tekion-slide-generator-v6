@@ -874,13 +874,14 @@ def build_html(session_dir: str) -> str:
     return page
 
 
-def serve(session_dir: str, timeout: int, open_browser: bool = True) -> int:
-    """校正室をローカルサーバで開き、フィードバック受信までブロックする。
+def start_server(session_dir: str, timeout: int, open_browser: bool = True):
+    """ダッシュボードサーバを構築して返す（serve_forever は呼び出し側が回す）。
 
+    Returns: SimpleNamespace(httpd, url, received: Event, feedback_path, timer)
     - GET /                : 最新の manifest から HTML を毎回組み立てて返す
     - GET /export/pptx|pdf : その時点の確定版でデッキを書き出してダウンロード（継続）
     - POST /select-version : 表示中バージョンを確定版に（manifest 即反映、継続）
-    - POST /feedback       : 修正指示を保存してサーバ終了（= 完了通知で Claude が動く）
+    - POST /feedback       : 修正指示を保存してサーバ終了（= 完了通知でエージェントが動く）
     """
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1055,19 +1056,32 @@ def serve(session_dir: str, timeout: int, open_browser: bool = True) -> int:
                                               httpd.shutdown()))
     timer.daemon = True
     timer.start()
-    httpd.serve_forever()
-    timer.cancel()
 
-    if not received.is_set():
+    from types import SimpleNamespace
+    return SimpleNamespace(httpd=httpd, url=url, received=received,
+                           feedback_path=feedback_path, timer=timer)
+
+
+def report_feedback(handle) -> int:
+    """受信済みフィードバックの要約を表示する。Returns: exit code (0=受信, 2=未受信)"""
+    if not handle.received.is_set():
         return 2
-    with open(feedback_path, "r", encoding="utf-8") as f:
+    with open(handle.feedback_path, "r", encoding="utf-8") as f:
         fb = json.load(f).get("feedback", {})
-    print(f"✅ フィードバック受信: {feedback_path}")
+    print(f"✅ フィードバック受信: {handle.feedback_path}")
     if fb:
         print(f"   要修正 {len(fb)}枚: {', '.join(sorted(fb))}")
     else:
         print("   全スライド校了")
     return 0
+
+
+def serve(session_dir: str, timeout: int, open_browser: bool = True) -> int:
+    """ダッシュボードを開き、フィードバック受信までブロックする。"""
+    handle = start_server(session_dir, timeout, open_browser)
+    handle.httpd.serve_forever()
+    handle.timer.cancel()
+    return report_feedback(handle)
 
 
 def main() -> int:
