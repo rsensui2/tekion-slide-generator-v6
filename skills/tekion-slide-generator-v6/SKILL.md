@@ -86,12 +86,10 @@ TIMESTAMP=$(date +%Y-%m-%d_%H%M%S) && OUTPUT_DIR="[指定された出力先]" &&
 
 - **Claude Code**: Bash ツールの `run_in_background: true` で実行。プロセスの完了通知が
   「修正依頼の受信」を意味するので、通知が来たら `slide_feedback.json` を読んで差分編集へ
-- **Codex ほか**: 生成が終わってレビュー待ちになったら、**そのまま前面で実行してよい**
-  （ユーザーが送信するとコマンドが exit 0 で戻るので、続けて `slide_feedback.json` を読む。
-  exit 2 はタイムアウト）。ターンを終える必要がある場合は `nohup ... &` で起動したままにし、
-  次のユーザー発話時に必ず `${SESSION_DIR}/slide_feedback.json` の有無を確認して処理する。
-  **サーバプロセスが死ぬと送信ボタンが機能しなくなる**ため、ターン終了時にサーバを
-  道連れにしない（nohup 必須）
+- **Codex ほか**（サンドボックスがコマンド終了時に子プロセスを殺す環境。nohup も生き残れない）:
+  Phase 1 ではサーバを起動しない。**新規生成では Phase 7 に `--with-dashboard` を付ける**
+  （生成・実況・レビュー待ちが1つの前面コマンドで完結する）。取り込み改修では
+  `review_deck.py --serve` を前面実行する（送信で exit 0 → `slide_feedback.json` を読む）
 
 ```bash
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
@@ -265,6 +263,11 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
   --image-size 2K \
   --logo "${LOGO}"
 ```
+
+**Codex 等（Phase 1 でサーバを常駐できなかった環境）は `--with-dashboard` を付ける**:
+生成前にダッシュボードが起動して実況が見え、生成後はレビュー送信までコマンドがブロックする。
+送信で exit したら出力の「フィードバック受信」と `slide_feedback.json` を読んで Phase 8 へ
+（`--dashboard-timeout` 既定 7200 秒。内蔵ブラウザで開くなら `--dashboard-no-open`）。
 
 - `resolve_brand.py` がアクティブプリセットの `<slug>.config.json` から `LOGO` /
   `SLIDE_LOGO_POSITION` / `SLIDE_LOGO_SCALE`（/ `SLIDE_FOOTER_TEXT`）を解決する
