@@ -27,8 +27,6 @@
 
 ## 低（体験・ドキュメント）
 
-- **references/architecture.md が旧世代**: Claude SubAgent/Gemini/Phase 0〜5 の記述。
-  現行（Phase 1〜9 + Hub/worker/queue）へ全面書き換え、旧スクリプトは legacy 明記
 - **表紙先行パイプライン**: 表紙1枚を先行生成して計画時間を隠す
 - **UI の push 更新**: SSE / 生成中のみ500msポーリング + カード単位DOM更新
 - **legacy sticky port の記録競合**: 同時初回起動で最後の書き込みが勝つ（ハブ経路では無関係）

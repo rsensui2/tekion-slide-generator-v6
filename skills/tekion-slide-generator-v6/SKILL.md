@@ -27,8 +27,8 @@ speed_first: true  # 下記「立ち上がりを速くする」を守る
 ```
 
 **立ち上がりを速くする**（ユーザーはダッシュボードに最初のスライドが出るまでの時間で体感する）:
-- 読むのは SKILL.md だけでよい。references/（architecture・troubleshooting・quality-checklist 等）は
-  トラブル時や品質チェック時に必要になってから読む
+- 読むのは SKILL.md だけでよい。references/ はプリセット・テンプレートの置き場で、
+  必要になってから読む
 - アクティブプリセットがあれば design_guidelines はコピーのみ（執筆しない）。無い場合も
   テンプレートの Brand Design System の値を差し替える程度に留め、ゼロから書き起こさない
 - Phase 1（ダッシュボード起動）を最優先で実行してから Phase 2 以降を考える。
@@ -486,9 +486,6 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
 
 | ファイル | 内容 |
 |----------|------|
-| [references/architecture.md](references/architecture.md) | アーキテクチャ図 + API仕様 |
-| [references/troubleshooting.md](references/troubleshooting.md) | トラブルシューティング |
-| [references/quality-checklist.md](references/quality-checklist.md) | 品質チェックリスト |
 | [references/design_guidelines_template.md](references/design_guidelines_template.md) | デザインガイドライン（Brand Design System 含む） |
 | [references/presets/](references/presets/) | プリセット集 |
 
