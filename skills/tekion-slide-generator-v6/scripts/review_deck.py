@@ -347,14 +347,37 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     font-family: inherit; font-weight: 600;
   }
   .slip textarea::placeholder { color: #d8a5a1; font-weight: 400; }
+  .slipopts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+              padding: 0 18px 12px; }
   .rebuild-opt {
     display: flex; align-items: center; gap: 7px;
-    padding: 0 18px 12px; font-size: 12px; font-weight: 600; color: #c08d88;
-    cursor: pointer; user-select: none;
+    font-size: 12px; font-weight: 600; color: #c08d88;
+    cursor: pointer; user-select: none; margin-left: auto;
   }
   .rebuild-opt input { accent-color: var(--red); width: 14px; height: 14px; margin: 0;
                        cursor: pointer; }
   .rebuild-opt:has(input:checked) { color: var(--red); }
+  .attach-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px dashed #e0b3ae; border-radius: 999px; padding: 5px 14px;
+    font-size: 12px; font-weight: 600; color: #c08d88; cursor: pointer;
+    user-select: none; transition: border-color .15s, color .15s;
+  }
+  .attach-btn:hover { border-color: var(--red); color: var(--red); }
+  .attach-chips { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .attach-chips .chip { position: relative; display: inline-block; line-height: 0; }
+  .attach-chips .chip img { height: 40px; width: auto; max-width: 88px; object-fit: cover;
+                            border-radius: 6px; border: 1px solid #e0b3ae; }
+  .attach-chips .chip button {
+    position: absolute; top: -6px; right: -6px; width: 17px; height: 17px;
+    border-radius: 50%; border: 0; background: var(--red); color: #fff;
+    font-size: 11px; line-height: 1; cursor: pointer; padding: 0;
+  }
+  .slip.att-dragover { border-color: var(--red); box-shadow: 0 0 0 3px #d93b3133;
+                       background: var(--red-tint); }
+  /* 全体指示（デッキ先頭） */
+  .gslip { margin: 0; }
+  .gslip textarea { min-height: 46px; }
   .slip .send {
     align-self: stretch; display: flex; align-items: center; justify-content: center;
     border: 0; border-left: 1px solid #f0c9c5;
@@ -570,8 +593,9 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   label.hdr-tool { cursor: pointer; }
   #drop-overlay {
     display: none; position: fixed; inset: 0; z-index: 50;
-    background: rgba(224,80,0,.86); backdrop-filter: blur(3px);
-    align-items: center; justify-content: center;
+    background: rgba(224,80,0,.55); backdrop-filter: blur(2px);
+    align-items: flex-start; justify-content: center; padding-top: 10vh;
+    pointer-events: none;  /* 視覚のみ。ドロップは下の要素（赤入れ欄 or 画面全体）が受ける */
   }
   #drop-overlay.show { display: flex; }
   #drop-overlay .box {
@@ -651,6 +675,7 @@ __PENDING_BANNER__
 __RAIL__
   </nav>
   <main>
+__GLOBAL_PANEL__
 __CARDS__
   </main>
 </div>
@@ -673,8 +698,9 @@ __SITES_LOGO__<a href="https://tekion.jp" target="_blank" rel="noopener">tekion.
 <button id="reload-banner" onclick="location.reload()">デッキが更新されました — 再読み込み</button>
 <div id="undo-toast"><span id="undo-msg">スライドを削除しました</span><button onclick="undoDelete()">元に戻す</button></div>
 <div id="ok-toast"></div>
-<div id="drop-overlay"><div class="box">ここにドロップして読み込み<br>
-<small>.pptx / .pdf は1枚ずつのスライドに分解 / PNG・JPG は1枚のスライドとして追加</small></div></div>
+<div id="drop-overlay"><div class="box">ドロップで読み込み<br>
+<small>スライドの赤い記入欄に落とす → そのスライドの<b>参照画像</b>として添付<br>
+それ以外に落とす → デッキに取り込み（.pptx / .pdf は1枚ずつに分解、画像は1枚のスライドに）</small></div></div>
 
 <footer class="hint">
   バージョンを選んで比較し、良い版を「確定にする」。修正指示は各スライドから即送信、または右上からまとめて依頼。
@@ -700,7 +726,11 @@ let submitted = false;
 let pollFails = 0;
 function hasUserInput() {
   if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') return true;
-  return [...document.querySelectorAll('textarea[data-slide]')].some(t => t.value.trim());
+  if ([...document.querySelectorAll('textarea[data-slide]')].some(t => t.value.trim())) return true;
+  const g = document.getElementById('global-instruction');
+  if (g && g.value.trim()) return true;
+  // 添付画像も書きかけの入力として扱う（自動リロードで失わない）
+  return typeof ATTACH !== 'undefined' && Object.values(ATTACH).some(l => l && l.length);
 }
 const STAGE_LABELS = {
   planning:  ['スライド構成を執筆中', 'Claude が内容を設計しています'],
@@ -1066,14 +1096,82 @@ const spy = new IntersectionObserver(entries => {
 document.querySelectorAll('article.proof').forEach(a => spy.observe(a));
 
 /* --- 修正指示 --- */
+/* 添付画像（スライド毎）: base → [{name, data_b64}] */
+const ATTACH = {};
+function readImageB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(',', 2)[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+async function addAttachments(c, files) {
+  const imgs = [...files].filter(f => f.type.startsWith('image/'));
+  if (!imgs.length) { alert('画像ファイル（PNG/JPG等）を添付してください'); return; }
+  const base = c.dataset.slide;
+  const list = ATTACH[base] = ATTACH[base] || [];
+  for (const f of imgs.slice(0, 8 - list.length)) {
+    list.push({ name: f.name, data_b64: await readImageB64(f), type: f.type });
+  }
+  renderChips(c);
+  markCard(c.querySelector('textarea'));
+}
+function pickAttachments(input) {
+  const c = card(input);
+  if (input.files.length) addAttachments(c, input.files);
+  input.value = '';
+}
+function renderChips(c) {
+  const wrap = c.querySelector('.attach-chips');
+  if (!wrap) return;
+  const base = c.dataset.slide;
+  const list = ATTACH[base] || [];
+  wrap.innerHTML = list.map((a, i) =>
+    '<span class="chip"><img src="data:' + (a.type || 'image/png') + ';base64,' + a.data_b64 +
+    '" alt="" title="' + a.name.replace(/"/g, '&quot;') + '">' +
+    '<button onclick="removeAttachment(this,' + i + ')" title="添付を外す" aria-label="添付を外す">×</button></span>'
+  ).join('');
+}
+function removeAttachment(btn, idx) {
+  if (submitted) return;
+  const c = card(btn);
+  (ATTACH[c.dataset.slide] || []).splice(idx, 1);
+  renderChips(c);
+  markCard(c.querySelector('textarea'));
+}
+/* 赤入れ欄への直接ドロップ = そのスライドへの参照画像添付
+   （ドロップオーバーレイは pointer-events:none の視覚のみなので、ここに落ちる） */
+function bindSlipDrop() {
+  if (!SERVED) return;
+  document.querySelectorAll('article.proof .slip').forEach(slip => {
+    slip.addEventListener('dragover', e => {
+      e.preventDefault(); e.stopPropagation();
+      slip.classList.add('att-dragover');
+    });
+    slip.addEventListener('dragleave', () => slip.classList.remove('att-dragover'));
+    slip.addEventListener('drop', e => {
+      e.preventDefault(); e.stopPropagation();
+      slip.classList.remove('att-dragover');
+      dragDepth = 0;
+      document.getElementById('drop-overlay').classList.remove('show');
+      if (!submitted && e.dataTransfer.files.length) {
+        addAttachments(card(slip), e.dataTransfer.files);
+      }
+    });
+  });
+}
+bindSlipDrop();
 function markCard(el) {
   const c = card(el);
   const text = c.querySelector('textarea').value.trim();
-  const rb = c.querySelector('.rebuild-opt input');
-  const rebuild = !!(rb && rb.checked);
-  const inked = text.length > 0 || rebuild;
+  const kr = c.querySelector('.rebuild-opt input');
+  const keepref = !!(kr && kr.checked);
+  const atts = (ATTACH[c.dataset.slide] || []).length;
+  const inked = text.length > 0 || atts > 0;
   c.classList.toggle('has-ink', inked);
-  c.querySelector('.state').textContent = rebuild ? '作り直し' : (inked ? '要修正' : '校了');
+  c.querySelector('.state').textContent =
+    !inked ? '校了' : (keepref ? '要修正' : '作り直し');
   const railItem = railMap[c.id];
   if (railItem) {
     railItem.classList.toggle('has-ink', inked);
@@ -1090,7 +1188,8 @@ function freeze(message) {
   submitted = true;
   document.getElementById('done-banner').classList.add('show');
   // 送信後は manifest を変える操作をすべて凍結する（送信済み内容との競合防止）
-  document.querySelectorAll('textarea, .slip .send, .rebuild-opt input, .hbtn, .vnode')
+  document.querySelectorAll(
+    'textarea, .slip .send, .rebuild-opt input, .attach-btn input, .attach-chips button, .hbtn, .vnode')
     .forEach(t => t.disabled = true);
   document.querySelectorAll('.rail a[draggable]').forEach(a => a.removeAttribute('draggable'));
   const btn = document.getElementById('submit-btn');
@@ -1102,33 +1201,52 @@ async function post(payload) {
     body: JSON.stringify(payload) });
   if (!res.ok) throw new Error(res.status);
 }
-/* rebuild は専用配列に加え、rebuild キーを知らない旧エージェントにも依頼が
+/* デフォルト = 前の画像を参照せず作り直し（rebuild）。
+   「🔗 前の画像を参照して微修正」にチェックしたスライドだけ差分編集になる。
+   rebuild は専用配列に加え、rebuild キーを知らない旧エージェントにも依頼が
    届くよう feedback にもマーカー付きで複製する（新エージェントはマーカー行を除いて読む） */
 const REBUILD_MARK = '【作り直し】前の画像を参照せず、ゼロから再生成する。';
 function slipEntry(c) {
   const t = c.querySelector('textarea');
   if (!t) return null;  // プレースホルダーには記入欄が無い
   const text = t.value.trim();
-  const rb = c.querySelector('.rebuild-opt input');
-  return { base: c.dataset.slide, text, rebuild: !!(rb && rb.checked) };
+  const kr = c.querySelector('.rebuild-opt input');
+  return { base: c.dataset.slide, text, keepref: !!(kr && kr.checked),
+           atts: ATTACH[c.dataset.slide] || [] };
 }
 function addEntry(payload, e) {
-  if (e.rebuild) {
+  if (!e.text && !e.atts.length) return;
+  const text = e.text || '添付画像を参照して修正';
+  if (e.keepref) {
+    payload.feedback[e.base] = text;
+  } else {
     payload.rebuild.push(e.base);
-    payload.feedback[e.base] = e.text ? REBUILD_MARK + '\\n' + e.text : REBUILD_MARK;
-  } else if (e.text) {
-    payload.feedback[e.base] = e.text;
+    payload.feedback[e.base] = REBUILD_MARK + '\\n' + text;
   }
+  if (e.atts.length) {
+    payload.attachments[e.base] = e.atts.map(a => ({ name: a.name, data_b64: a.data_b64 }));
+  }
+}
+function addGlobal(payload) {
+  const g = document.getElementById('global-instruction');
+  if (g && g.value.trim()) {
+    payload.global = g.value.trim();
+    const gk = document.getElementById('global-keepref');
+    payload.global_keep_reference = !!(gk && gk.checked);
+  }
+}
+function emptyPayload() {
+  return { session_dir: SESSION_DIR, feedback: {}, rebuild: [], attachments: {} };
 }
 async function sendOne(btn) {
   const e = slipEntry(card(btn));
-  if (!e || (!e.text && !e.rebuild)) {
-    alert('修正指示を書くか、「ゼロから作り直す」にチェックしてから送信してください');
+  if (!e || (!e.text && !e.atts.length)) {
+    alert('修正指示を書くか、参照画像を添付してから送信してください');
     return;
   }
   btn.disabled = true; btn.textContent = '…';
   try {
-    const payload = { session_dir: SESSION_DIR, feedback: {}, rebuild: [] };
+    const payload = emptyPayload();
     addEntry(payload, e);
     await post(payload);
     freeze('修正を依頼しました');
@@ -1138,22 +1256,23 @@ async function sendOne(btn) {
   }
 }
 function collectAll() {
-  const payload = { session_dir: SESSION_DIR, feedback: {}, rebuild: [] };
+  const payload = emptyPayload();
   document.querySelectorAll('article.proof[data-slide]').forEach(c => {
     const e = slipEntry(c);
     if (e) addEntry(payload, e);
   });
+  addGlobal(payload);
   return payload;
 }
 async function submitAll() {
   const payload = collectAll();
-  const n = Object.keys(payload.feedback).length;
+  const n = Object.keys(payload.feedback).length + (payload.global ? 1 : 0);
   const btn = document.getElementById('submit-btn');
   if (SERVED) {
     btn.disabled = true; btn.textContent = '送信中…';
     try {
       await post(payload);
-      freeze(n ? n + '枚の修正を依頼しました' : '全スライド校了で送信しました');
+      freeze(n ? '修正を依頼しました（' + n + '件）' : '全スライド校了で送信しました');
     } catch (e) {
       btn.disabled = false; btn.textContent = 'まとめて修正依頼する';
       alert('送信に失敗しました（サーバが終了している可能性）。もう一度お試しください。');
@@ -1204,12 +1323,27 @@ __VTREE__
         <div class="label"><span class="kanji">修正指示</span><span class="sub">FEEDBACK</span></div>
         <div class="slipmain">
           <textarea data-slide="__NAME__" placeholder="このスライドへの修正指示（空欄なら校了）" oninput="markCard(this)"></textarea>
-          <label class="rebuild-opt" title="デザイン・構成をガラッと変えたいときに。前の画像を参照として送らず、プロンプト（+上の指示）から再生成します">
-            <input type="checkbox" data-rebuild="__NAME__" onchange="markCard(this)"> 🔄 前の画像を参照せず、ゼロから作り直す</label>
+          <div class="slipopts">
+            <label class="attach-btn" title="参照画像を添付（この記入欄へのドラッグ&ドロップでも可）">🖼 + 画像<input type="file" accept="image/*" multiple hidden onchange="pickAttachments(this)"></label>
+            <span class="attach-chips"></span>
+            <label class="rebuild-opt" title="レイアウト・構図を保ったまま微修正したいときに。現在の画像を参照として渡します（デフォルトは参照せず、プロンプト+指示で再生成）">
+              <input type="checkbox" data-keepref="__NAME__" onchange="markCard(this)"> 🔗 前の画像を参照して微修正</label>
+          </div>
         </div>
         <button class="send" onclick="sendOne(this)" title="この修正を依頼" aria-label="この修正を依頼">⏎</button>
       </div>
     </article>"""
+
+GLOBAL_PANEL_HTML = """    <section class="slip gslip">
+      <div class="label"><span class="kanji">全体指示</span><span class="sub">ALL SLIDES</span></div>
+      <div class="slipmain">
+        <textarea id="global-instruction" placeholder="デッキ全体への指示（例: 全体的に余白を増やして / 文字をもっと大きく / トーンを明るく）"></textarea>
+        <div class="slipopts">
+          <label class="rebuild-opt" title="レイアウトを保ったまま全スライドを微修正したいとき">
+            <input type="checkbox" id="global-keepref"> 🔗 前の画像を参照して微修正</label>
+        </div>
+      </div>
+    </section>"""
 
 RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__" draggable="true" title="ドラッグで並べ替え"><span class="tag">__ORD__</span><img src="__RAIL_SRC__" alt="__NAME__ サムネイル"></a>"""
 
@@ -1557,6 +1691,7 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
         "__COUNT__": str(rendered_total),
         "__RAIL__": "" if page_kind == "home" else "\n".join(rail),
         "__CARDS__": landing if page_kind == "home" else "\n".join(cards),
+        "__GLOBAL_PANEL__": GLOBAL_PANEL_HTML if (page_kind == "deck" and rendered_total > 0) else "",
         "__SESSION_DIR_JSON__": json.dumps(os.path.abspath(session_dir), ensure_ascii=False),
     }.items():
         out = out.replace(k, v)
@@ -1689,8 +1824,41 @@ class DashboardService:
             save_manifest(self.manifest_path, manifest)
         return {"ok": True}, 200
 
+    @staticmethod
+    def _safe_name(name: str, limit: int = 80) -> str:
+        cleaned = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in name)
+        return cleaned[:limit] or "ref"
+
     def save_feedback(self, payload: dict) -> None:
         os.makedirs(self.session_dir, exist_ok=True)
+        # 添付画像（赤入れ欄に追加された参照画像）をファイルに落とし、パスへ置き換える
+        attachments = payload.get("attachments")
+        if isinstance(attachments, dict) and attachments:
+            import base64
+            from datetime import datetime as _dt
+            assets_dir = os.path.join(self.session_dir, "feedback_assets")
+            stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            saved_map = {}
+            for base, items in attachments.items():
+                if not isinstance(items, list):
+                    continue
+                saved = []
+                for i, item in enumerate(items[:8]):  # 1スライド最大8枚
+                    if not isinstance(item, dict) or not item.get("data_b64"):
+                        continue
+                    fname = (f"{stamp}_{self._safe_name(str(base))}_{i}_"
+                             f"{self._safe_name(os.path.basename(str(item.get('name', 'ref.png'))))}")
+                    path = os.path.join(assets_dir, fname)
+                    try:
+                        os.makedirs(assets_dir, exist_ok=True)
+                        with open(path, "wb") as fh:
+                            fh.write(base64.b64decode(item["data_b64"]))
+                        saved.append(path)
+                    except (OSError, ValueError):
+                        continue
+                if saved:
+                    saved_map[str(base)] = saved
+            payload["attachments"] = saved_map
         tmp_path = self.feedback_path + ".tmp"
         with self.manifest_lock:
             with open(tmp_path, "w", encoding="utf-8") as handle:

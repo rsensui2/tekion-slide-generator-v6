@@ -81,7 +81,8 @@ def parse_args():
     parser.add_argument('--rebuild', action='store_true',
                         help='前の画像を参照せず、元の生成プロンプト（+指示）から作り直す')
     parser.add_argument('--reference-image',
-                        help='--rebuild 時に渡す参照画像（キャラクター等のアセット。任意）')
+                        help='追加の参照画像（キャラクター・ユーザー添付画像等。'
+                             '--rebuild では唯一の参照、指示編集では現行画像に加えて渡される）')
     parser.add_argument('--rollback', action='store_true', help='1つ前のバージョンに戻す')
     parser.add_argument('--provider', default='codex', choices=['codex', 'openai', 'mock'],
                         help='画像生成プロバイダ（デフォルト: codex）')
@@ -226,6 +227,9 @@ def main():
         if not edit_from_raw:
             print("⚠️  raw 画像が無いため、焼き込み済み画像から編集します"
                   "（ロゴ・フッターの再合成はスキップし、参照画像の再現に任せます）")
+        if args.reference_image and not os.path.exists(args.reference_image):
+            print(f"❌ 参照画像が見つかりません: {args.reference_image}")
+            return 1
 
     versions = entry.get('versions', [])
     output_path, version_no = next_version_path(images_dir, slide_base, versions)
@@ -242,6 +246,16 @@ def main():
 
     from providers import get_provider, ImageRequest
 
+    # 指示編集で --reference-image が渡された場合は、現行画像に加えて参照に含める
+    # （「この画像のように」「このキャラを入れて」等のユーザー添付画像）
+    extra_refs = ([args.reference_image]
+                  if (not args.rebuild and not args.annotated and args.reference_image)
+                  else [])
+    if extra_refs:
+        prompt += ("\n\n[参照画像の読み方]\n"
+                   "最後の参照画像が「現在のスライド」。それ以外はユーザーが添付した参考資料"
+                   "（キャラクター・見本レイアウト・使ってほしい写真等）で、指示に従って反映すること。")
+
     request = ImageRequest(
         prompt=prompt,
         output_path=output_path,
@@ -249,6 +263,7 @@ def main():
         image_size=args.image_size,
         max_retries=args.max_retries,
         reference_image_path=reference,
+        reference_images=extra_refs,
         # raw から編集した場合のみロゴ・フッターを決定的に再合成する。
         # 焼き込み済み画像からの編集では二重焼き込みになるためスキップ。
         logo_path=args.logo if edit_from_raw else None,

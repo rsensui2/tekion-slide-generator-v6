@@ -73,7 +73,19 @@ sed \
 cp -f -- "$TMP_PLIST" "$PLIST"
 
 launchctl bootout "${DOMAIN}/${LABEL}" >/dev/null 2>&1 || true
-launchctl bootstrap "$DOMAIN" "$PLIST"
+# bootout 直後の bootstrap は launchd 側の後始末と競合して失敗することがある（実測）→ リトライ
+bootstrap_ok=0
+for _attempt in 1 2 3 4 5; do
+  if launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; then
+    bootstrap_ok=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$bootstrap_ok" != 1 ]]; then
+  echo "launchctl bootstrap に失敗しました。少し待ってから再実行してください。" >&2
+  exit 1
+fi
 launchctl enable "${DOMAIN}/${LABEL}"
 launchctl kickstart -k "${DOMAIN}/${LABEL}"
 
