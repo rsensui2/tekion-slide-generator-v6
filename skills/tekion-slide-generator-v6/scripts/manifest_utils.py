@@ -56,6 +56,27 @@ def load_manifest(path: str) -> dict:
     return {"version": MANIFEST_VERSION, "created_at": now_iso(), "slides": {}}
 
 
+def locked_update(path: str, mutate) -> dict:
+    """manifest の read-modify-write を fcntl.flock でプロセス間排他して行う。
+
+    並列の edit_slide / ハブ操作が「読む→長時間処理→書く」で互いの更新を
+    上書きしないよう、**保存の直前に最新を読み直して自分の変更だけを適用**する。
+    mutate(manifest) は渡された dict をその場で書き換える関数。Returns: 保存した manifest。
+    """
+    import fcntl
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            manifest = load_manifest(path)
+            mutate(manifest)
+            save_manifest(path, manifest)
+            return manifest
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
+
+
 def save_manifest(path: str, manifest: dict) -> None:
     """atomic write（一時ファイル→rename）。並列ワーカーからの保存でも壊れない。
 

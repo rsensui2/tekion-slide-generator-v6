@@ -295,6 +295,31 @@ class HubRequestHandler(BaseHTTPRequestHandler):
         else:
             self._send_static(service, route)
 
+    def _spawn_feedback_worker(self, session_dir: str) -> None:
+        """修正指示の自動処理ワーカーを切り離しで起動する（チャット不要の赤入れループ）。
+
+        ハブは launchd 常駐でサンドボックス外のため、ワーカーは送信元の
+        エージェント/タブと無関係に生き続ける。多重起動はワーカー側の
+        .worker.lock が防ぐので、送信のたびに起動を試みてよい。
+        TEKION_HUB_AUTOWORKER=0 で無効化（チャット主導に戻す）。
+        """
+        if os.environ.get("TEKION_HUB_AUTOWORKER", "1") == "0":
+            return
+        worker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "feedback_worker.py")
+        if not os.path.exists(worker):
+            return
+        try:
+            import subprocess
+            log_path = os.path.join(session_dir, "feedback_worker.log")
+            with open(log_path, "a", encoding="utf-8") as log:
+                subprocess.Popen([sys.executable, "-u", worker,
+                                  "--session-dir", session_dir],
+                                 stdout=log, stderr=log,
+                                 start_new_session=True)
+        except OSError as exc:
+            print(f"⚠️  feedback worker の起動に失敗: {exc}")
+
     def do_POST(self) -> None:
         if not self._host_allowed():
             self.send_error(403)
@@ -336,6 +361,7 @@ class HubRequestHandler(BaseHTTPRequestHandler):
                 self._respond_json(result, status)
             elif route == "/feedback":
                 service.save_feedback(payload)
+                self._spawn_feedback_worker(service.session_dir)
                 self._respond_json({"ok": True})
             elif route == "/import":
                 new_session = root_import or payload.get("mode") == "new_session"

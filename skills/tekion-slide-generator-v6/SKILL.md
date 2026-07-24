@@ -124,22 +124,26 @@ curl -fsS "${DECK_URL}viewers"
 - `{"active": true}`: 既にユーザーが見ているため何も開かない
 - 同じタスク中は、生成・修正後も二度と開き直さない。表示中のタブが `/status` のポーリングで反映を拾う
 
-修正指示の待ち受けはサーバと独立したファイル監視で行う:
+**修正指示の処理はハブが自動で行う**（送信 → ハブが feedback_worker を起動 →
+edit_slide で反映 → タブに自動反映）。**エージェントの待ち受けは不要** — デッキ URL を
+提示したら、通常どおり応答を終えてよい。チャットを閉じても赤入れループは回り続ける。
+
+- ワーカーで扱えない依頼（構成・枚数の変更、質の判断が要る依頼）はユーザーが
+  チャットで「続きを」と言う。そのときは未処理キューを確認して処理する:
 
 ```bash
-# Claude Code: バックグラウンドで長時間待てる
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
-
-# Codex: 前面の長時間ブロックはコマンド上限で殺されるため、短い待ちを繰り返す
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 300
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --pending   # 未処理を古い順に表示
+# → 内容ごとに Phase 8 の編集を実行し、完了したら:
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --ack-feedback
 ```
 
-**Codex の待ち受けループ（重要）**: 上の 300 秒コマンドを前面実行し、
-- exit 0（受信）→ stdout の JSON を読んで Phase 8 の編集へ。編集後、また待ち受けに戻る
-- exit 2（タイムアウト）→ **同じコマンドをそのまま再実行**する。ユーザーが終了を告げるまで繰り返す
-- セッションを終えるときは「修正指示はダッシュボードから送れば保存されます。
-  次のチャットで『続きを』と言えば再開します」と必ず案内する（指示は slide_feedback.json に
-  永続化され、ハブに「未処理」バッジが出る）
+**ハブが無い環境のフォールバック**（従来フロー。ワーカーも動かないため待ち受けが必要）:
+- Claude Code: `--serve --persist`（バックグラウンド）+ `--await-feedback --serve-timeout 28800`（バックグラウンド）
+- Codex: 生成は Phase 7 の `--with-dashboard`、レビュー待ちは
+  `--await-feedback --serve-timeout 300` を前面実行。exit 0 → 編集して `--ack-feedback` → 待機に戻る。
+  exit 2 → 1回だけ自動で再実行（計600秒）。それでも無ければ待機を終了する
+  （1ターンの待機は合計30分まで。ユーザーが明示的に延長を頼んだ時だけ新しい待機枠を開く）。
+  終了時は「修正指示は保存されます。続きは『続きを』で再開できます」と必ず案内する
 
 固定ハブ `http://127.0.0.1:7799/` のスタート画面では、ユーザーは2つの入り口を選べる:
 
@@ -148,8 +152,8 @@ ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" -
 - **新しく作る**: このまま Phase 2 以降を進める。**Phase 7 の生成進捗はスライドダッシュボードに実況される**
   （「生成中 n / N」表示、完成したスライドから順に画面に現れる）
 
-スライドダッシュボードのプロセスはユーザーが修正指示を送信すると完了する。完了通知を受けたら
-`slide_feedback.json` を読み、Phase 8 の差分編集に入る（生成前・生成中に届くこともある）。
+修正指示はハブが自動処理する（Phase 8 参照）。生成前・生成中に届いた指示も
+未処理キューに積まれ、順に処理される。
 
 ## Phase 2: デザインガイドライン作成
 
@@ -348,22 +352,28 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
 
 ## Phase 8: レビュー → 差分編集
 
-固定ハブの同じタブで、ユーザーにスライド単位のフィードバックをもらう。
-**ブラウザもサーバも開き直さず、待ち受けだけを起動する**:
+**標準の赤入れループはハブが自動処理する**（エージェントの出番なし）:
+ユーザーが送信 → ハブが feedback_worker.py を起動 → 未処理キューを古い順に
+edit_slide へ展開（作り直し/微修正/添付参照/全体指示） → 処理済みカーソルを進める →
+開いているタブに自動反映。エージェントは生成完了を報告して応答を終えてよい。
+
+**エージェントが Phase 8 を実行するのは次のときだけ**:
+- ユーザーが「続きを」等でチャットに依頼してきた（ワーカーで扱えない依頼・失敗の引き継ぎ）
+- ハブが無い環境（フォールバック。Phase 1 参照）
+
+その場合は未処理キューから読む:
 
 ```bash
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --pending
+# 古い順に処理し、編集・検証がすべて済んだら:
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --ack-feedback
 ```
-
-ハブが無い環境では、従来どおり `review_deck.py --serve`（前面）または
-`--serve --persist` + `--await-feedback` をフォールバックとして使える。
 
 ダッシュボード上でユーザーは修正指示のほか、スライドの並べ替え（カードの↑↓・レールのドラッグ）と
 削除（🗑 = ソフトデリート、manifest の state=removed）も直接できる。並び順は manifest の
 `slide_order` に保存され、表示・PPTX/PDF エクスポートに自動反映される。削除済みスライドは
 再生成でも復活しない（`--force` 時のみ復活）。
-ユーザーがブラウザで「修正を依頼する」を押した瞬間にこのプロセスが完了する。
-完了通知を受けたら `${SESSION_DIR}/slide_feedback.json` を Read する。形式:
+各送信ペイロードの形式（`--pending` が古い順に出力する。`slide_feedback.json` は最新分のみの互換用）:
 
 ```json
 {"feedback": {"02_solution_02": "指示", ...},
@@ -385,9 +395,10 @@ ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" -
 - `global` = デッキ全体への一括指示。**全スライド**（個別指示があるものはその指示と連結）に
   適用する。`global_keep_reference` が false なら各スライドを `--rebuild` で、true なら
   差分編集で回す。枚数が多い場合は数枚ずつ並列に実行してよい
-編集が終わったら `--await-feedback` を再起動して次の指示を待つ（開いているタブは manifest の
+編集がすべて済んだら `--ack-feedback` でカーソルを進める（開いているタブは manifest の
 変化を検知して自動更新されるので、サーバの開き直しは不要）。すべて空 = 全スライド校了。
 自分でも生成画像を Read で目視し、明白な問題（文字化け・欠け）は聞かれる前に直す。
+複数スライドを並列で編集してよい（manifest は flock で排他済み）。
 
 修正の種類で使い分ける:
 - デフォルト（rebuild 指定）→ 作り直し（--rebuild。元プロンプト+指示で再生成）

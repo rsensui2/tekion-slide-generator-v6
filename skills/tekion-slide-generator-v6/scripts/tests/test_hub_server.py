@@ -48,6 +48,9 @@ class HubServerIntegrationTest(unittest.TestCase):
         self.root = Path(self.temp_dir.name)
         self.old_db_path = session_registry.DB_PATH
         session_registry.DB_PATH = self.root / "registry" / "sessions.db"
+        # テストでは自動ワーカーを起動しない（実生成が走り、キューを ack してしまう）
+        os.environ["TEKION_HUB_AUTOWORKER"] = "0"
+        self.addCleanup(os.environ.pop, "TEKION_HUB_AUTOWORKER", None)
 
         self.session_a = self._make_session(
             "session-a",
@@ -309,7 +312,7 @@ class HubServerIntegrationTest(unittest.TestCase):
         self.assertEqual(status, 200)
         status, _headers, body = self._request(f"/s/{self.sid_a}/")
         self.assertEqual(status, 200)
-        self.assertIn("未処理の修正指示あり", body.decode("utf-8"))
+        self.assertIn("未処理の修正指示", body.decode("utf-8"))
 
         status, headers, body = self._request(f"/s/{self.sid_a}/export/pptx")
         self.assertEqual(status, 200, body[:200])

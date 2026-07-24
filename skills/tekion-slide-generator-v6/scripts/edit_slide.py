@@ -40,8 +40,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest_utils import (
-    get_entry, load_manifest, next_version_path, save_manifest, update_entry,
-    validate_image,
+    get_entry, load_manifest, locked_update, next_version_path, save_manifest,
+    update_entry, validate_image,
 )
 
 EDIT_PROMPT_TEMPLATE = """あなたはプレゼンテーションスライドの編集者です。
@@ -110,9 +110,10 @@ def rollback(manifest: dict, manifest_path: str, slide_base: str) -> int:
         return 1
     # raw も同じ版に切り替える（current だけ戻すと次回編集が別版の raw を参照してしまう）
     raw_candidate = os.path.join(os.path.dirname(prev), 'raw', os.path.basename(prev))
-    update_entry(manifest, slide_base, current_image=prev, state='validated',
-                 raw_image=raw_candidate if os.path.exists(raw_candidate) else None)
-    save_manifest(manifest_path, manifest)
+    locked_update(manifest_path,
+                  lambda m: update_entry(m, slide_base, current_image=prev, state='validated',
+                                         raw_image=raw_candidate if os.path.exists(raw_candidate)
+                                         else None))
     print(f"↩️  ロールバック完了: {slide_base} → {os.path.basename(prev)}")
     print("   (export は manifest の current_image を使うため、次回 export から反映されます)")
     return 0
@@ -288,18 +289,24 @@ def main():
         return 1
 
     new_raw = os.path.join(raw_dir, os.path.basename(output_path))
-    # rebuild で新 raw が無い場合（プロバイダが raw 非対応等）は旧 raw を残さない:
-    # 旧デザインの raw を次回編集で参照してしまうため
-    update_entry(manifest, slide_base,
-                 state='validated',
-                 current_image=output_path,
-                 raw_image=new_raw if os.path.exists(new_raw)
-                 else (None if args.rebuild else entry.get('raw_image')),
-                 versions=versions + [output_path],
-                 last_edit_instruction=('(rebuild) ' if args.rebuild else '')
-                 + (args.instruction[:300] if args.instruction
-                    else ('' if args.rebuild else '(mark edit)')))
-    save_manifest(manifest_path, manifest)
+
+    # 保存は flock 排他 + 最新 manifest への再適用で行う。
+    # 複数スライドの並列編集が「読む→生成（数分）→書く」で互いの更新を
+    # 上書きする lost update を防ぐ（rebuild で新 raw が無い場合は旧 raw を残さない）
+    def _apply(m):
+        fresh = get_entry(m, slide_base)
+        fresh_versions = [v for v in (fresh.get('versions') or []) if v != output_path]
+        update_entry(m, slide_base,
+                     state='validated',
+                     current_image=output_path,
+                     raw_image=new_raw if os.path.exists(new_raw)
+                     else (None if args.rebuild else fresh.get('raw_image')),
+                     versions=fresh_versions + [output_path],
+                     last_edit_instruction=('(rebuild) ' if args.rebuild else '')
+                     + (args.instruction[:300] if args.instruction
+                        else ('' if args.rebuild else '(mark edit)')))
+
+    locked_update(manifest_path, _apply)
 
     print(f"✅ 編集完了: {os.path.basename(output_path)} が確定版になりました")
     print(f"   気に入らなければ: python3 edit_slide.py --session-dir {session_dir} "

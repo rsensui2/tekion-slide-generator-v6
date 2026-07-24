@@ -360,18 +360,17 @@ def wait_for_review(dashboard, timeout: int) -> None:
     dashboard.timer.cancel()
     print(f"\n📊 レビュー待ち: {dashboard.url}")
     print("   ダッシュボードで赤入れして「修正を依頼する」を押すと、このコマンドが終了します")
+    from review_deck import pending_feedback
+    session_dir = os.path.dirname(dashboard.feedback_path)
     start = time.time()
     try:
         while time.time() - start < timeout and not dashboard.received.is_set():
             if dashboard.received.wait(timeout=2):
                 break
-            try:
-                if (os.path.exists(dashboard.feedback_path)
-                        and os.path.getmtime(dashboard.feedback_path) >= start):
-                    dashboard.received.set()  # ハブ経由の送信を検知
-                    break
-            except OSError:
-                pass
+            # ハブ経由の送信・生成中に届いていた未処理分もキューで検知する
+            if pending_feedback(session_dir):
+                dashboard.received.set()
+                break
     except KeyboardInterrupt:
         pass
     if not dashboard.received.is_set():

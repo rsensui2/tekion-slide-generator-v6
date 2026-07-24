@@ -32,7 +32,7 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest_utils import (load_manifest, ordered_bases, read_session_status,
-                            save_manifest, update_entry)
+                            locked_update, save_manifest, update_entry)
 
 PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="ja">
@@ -574,6 +574,8 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 
   /* Ryoko バナーボタン（スタート画面・横並び） */
   .choices.bannerbtns { grid-template-columns: 1fr 1fr; gap: 20px; }
+  .choices.single { grid-template-columns: 1fr; max-width: 560px; margin-left: auto;
+                    margin-right: auto; }
   @media (max-width: 760px) { .choices.bannerbtns { grid-template-columns: 1fr; } }
   .banner-btn { display: block; border: 0; padding: 0; background: none; cursor: pointer;
                 border-radius: 20px; overflow: hidden; width: 100%; line-height: 0;
@@ -733,10 +735,11 @@ function hasUserInput() {
   return typeof ATTACH !== 'undefined' && Object.values(ATTACH).some(l => l && l.length);
 }
 const STAGE_LABELS = {
-  planning:  ['スライド構成を執筆中', 'Claude が内容を設計しています'],
+  planning:  ['スライド構成を執筆中', 'AIが内容を設計しています'],
   prompting: ['画像プロンプトを生成中', 'デザイン指示を組み立てています'],
   prompted:  ['画像生成の開始を待機中', 'まもなく並列生成が始まります'],
   generating: ['スライドを生成中', ''],
+  editing:   ['修正指示を反映中', '完了した版から順にこの画面に現れます'],
   attention: ['一部スライドが未完成', '再実行すると欠損分だけ回収されます'],
 };
 function updateGenProgress(st) {
@@ -757,7 +760,7 @@ function updateGenProgress(st) {
   // ステージヒーロー: 生成前の段階と「1枚もできていない生成中」で大きく実況する
   const hero = document.getElementById('stage-hero');
   const stage = (st.session && st.session.stage) || '';
-  const preStages = ['planning', 'prompting', 'prompted'];
+  const preStages = ['planning', 'prompting', 'prompted', 'editing'];
   const showHero = preStages.includes(stage) || (stage === 'generating' && done === 0 && st.total > 0)
                    || (pending === 0 && failed > 0 && stage === 'attention');
   if (showHero && STAGE_LABELS[stage]) {
@@ -870,10 +873,6 @@ async function openSession(btn) {
   } finally {
     btn.disabled = false; btn.classList.remove('busy');
   }
-}
-function toggleCreateHint() {
-  const el = document.getElementById('create-hint');
-  if (el) el.hidden = !el.hidden;
 }
 function busyExport(a) {
   a.classList.add('busy');
@@ -1398,31 +1397,62 @@ def _spawn_child_server(target: str) -> str | None:
     return child_url
 
 
-def _pending_feedback_banner(session_dir: str) -> str:
-    """未処理のフィードバックがあれば、デッキ上部に出すバナー HTML を返す。"""
-    feedback_path = os.path.join(session_dir, "slide_feedback.json")
+FEEDBACK_CURSOR = ".processed"  # feedback_history/ 内の処理済みカーソルファイル
+
+
+def pending_feedback(session_dir: str) -> list:
+    """未処理のフィードバック履歴ファイル（古い順の絶対パス）を返す。
+
+    送信はすべて feedback_history/ にマイクロ秒付きファイル名で永続化される。
+    処理済みカーソル（FEEDBACK_CURSOR に最後に処理したファイル名）より新しいものが
+    「未処理」。mtime 比較ではなくキューなので、待ち受け開始前の送信・複数送信・
+    編集中の追加送信を取りこぼさない。
+    """
+    session_dir = os.path.realpath(os.path.abspath(session_dir))
+    hist_dir = os.path.join(session_dir, "feedback_history")
+    if not os.path.isdir(hist_dir):
+        return []
+    cursor = ""
     try:
-        feedback_mtime = os.path.getmtime(feedback_path)
-    except OSError:
-        return ""
-    latest_image = 0.0
-    images_dir = os.path.join(session_dir, "images")
-    try:
-        for name in os.listdir(images_dir):
-            if name.lower().endswith(".png"):
-                try:
-                    latest_image = max(latest_image, os.path.getmtime(os.path.join(images_dir, name)))
-                except OSError:
-                    pass
+        with open(os.path.join(hist_dir, FEEDBACK_CURSOR), "r", encoding="utf-8") as f:
+            cursor = f.read().strip()
     except OSError:
         pass
-    if feedback_mtime <= latest_image:
+    try:
+        names = sorted(n for n in os.listdir(hist_dir) if n.endswith(".json"))
+    except OSError:
+        return []
+    return [os.path.join(hist_dir, n) for n in names if n > cursor]
+
+
+def ack_feedback(session_dir: str) -> int:
+    """現在の未処理フィードバックを処理済みにする。Returns: ack した件数。
+
+    エージェントは未処理キューを古い順に処理し、編集・検証が完了した時点でのみ
+    これを呼ぶ（途中で呼ぶと未処理分が失われる）。
+    """
+    pend = pending_feedback(session_dir)
+    if not pend:
+        return 0
+    hist_dir = os.path.dirname(pend[-1])
+    with open(os.path.join(hist_dir, FEEDBACK_CURSOR), "w", encoding="utf-8") as f:
+        f.write(os.path.basename(pend[-1]))
+    return len(pend)
+
+
+def _pending_feedback_banner(session_dir: str) -> str:
+    """未処理のフィードバックがあれば、デッキ上部に出すバナー HTML を返す。"""
+    pend = pending_feedback(session_dir)
+    if not pend:
         return ""
     import datetime as _dt
-    sent = _dt.datetime.fromtimestamp(feedback_mtime).strftime("%H:%M")
+    try:
+        sent = _dt.datetime.fromtimestamp(os.path.getmtime(pend[0])).strftime("%H:%M")
+    except OSError:
+        sent = "--:--"
     return (
-        '<div class="pending-banner">⏳ 未処理の修正指示あり'
-        f'（{sent}送信）— エージェントに「続きを」と伝えてください</div>'
+        f'<div class="pending-banner">⏳ 未処理の修正指示 {len(pend)}件'
+        f'（最初の送信 {sent}）— エージェントに「続きを」と伝えてください</div>'
     )
 
 
@@ -1567,7 +1597,6 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
             return None
 
         btn_import = _data_uri("btn_import.png")
-        btn_create = _data_uri("btn_create.png")
 
         # 最近のセッション（現在のセッション以外・実在するもの）: note 風のカードグリッド
         recent_html = ""
@@ -1618,19 +1647,15 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
 
         backlink = (f'        <a class="backlink" href="{base_path or "/"}">開いているデッキへ戻る →</a>\n'
                     if cards else "")
-        if btn_import and btn_create:
-            choices = f"""      <div class="choices bannerbtns">
+        if btn_import:
+            choices = f"""      <div class="choices bannerbtns single">
         <label class="banner-btn" for="file-input" title=".pptx / .pdf / 画像 を選択（ドロップでも可）">
           <img src="{btn_import}" alt="既存デッキを読み込む"></label>
-        <button class="banner-btn" onclick="toggleCreateHint()" title="新しく作る">
-          <img src="{btn_create}" alt="新しく作る"></button>
       </div>"""
         else:
-            choices = """      <div class="choices">
+            choices = """      <div class="choices single">
         <label class="choice" for="file-input"><span class="big">📂</span>既存デッキを読み込む
           <small>.pptx / .pdf / 画像 をここにドロップ、<br>またはクリックして選択</small></label>
-        <div class="choice passive"><span class="big">✨</span>新しく作る
-          <small>Cursor / Claude にそのまま指示してください。<br>生成が始まると、ここに実況が流れます</small></div>
       </div>"""
 
         landing = f"""    <section class="landing">
@@ -1638,10 +1663,9 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
 {backlink}        <span class="eyebrow">Tekion Slide Generator</span>
         <h2>全枚数、確実に、<em>同じ顔で。</em></h2>
         <p class="lead">スライドの生成・赤入れ・書き出しまで、この画面がハブになります。<br>
-既存デッキのドロップでも、エージェントへのひと言でも、ここから始まります。</p>
+新しく作るときはエージェントに「◯◯のスライドを作って」と言うだけ。既存デッキはここにドロップ。</p>
       </div>
 {choices}
-      <p class="create-hint" id="create-hint" hidden>✨ Cursor / Claude に「◯◯のスライドを作って」と指示してください。<br>生成が始まると、ここに実況が流れます。</p>
 {recent_html}      <section class="onboard">
         <div class="sec-head"><span class="eyebrow">How It Works</span><h3>使い方は3ステップ</h3></div>
         <div class="steps">
@@ -1770,58 +1794,67 @@ class DashboardService:
                 or not os.path.isfile(image)):
             return {"ok": False, "error": f"image not found: {rel_image}"}, 400
         with self.manifest_lock:
-            manifest = load_manifest(self.manifest_path)
-            if slide not in manifest.get("slides", {}):
+            if slide not in load_manifest(self.manifest_path).get("slides", {}):
                 return {"ok": False, "error": f"unknown slide: {slide}"}, 404
             raw_candidate = os.path.join(os.path.dirname(image), "raw", os.path.basename(image))
-            update_entry(
-                manifest,
-                slide,
-                current_image=image,
-                state="validated",
-                raw_image=(raw_candidate if os.path.exists(raw_candidate)
-                           else manifest["slides"][slide].get("raw_image")),
-            )
-            save_manifest(self.manifest_path, manifest)
+
+            def _apply(manifest):
+                if slide not in manifest.get("slides", {}):
+                    return
+                update_entry(
+                    manifest,
+                    slide,
+                    current_image=image,
+                    state="validated",
+                    raw_image=(raw_candidate if os.path.exists(raw_candidate)
+                               else manifest["slides"][slide].get("raw_image")),
+                )
+
+            locked_update(self.manifest_path, _apply)
         return {"ok": True}, 200
 
     def reorder(self, order) -> tuple[dict, int]:
         if not isinstance(order, list) or not all(isinstance(item, str) for item in order):
             return {"ok": False, "error": "order must be a list of slide names"}, 400
         with self.manifest_lock:
-            manifest = load_manifest(self.manifest_path)
-            known = manifest.get("slides", {})
-            # 重複は最初の1件だけ採用し、未指定の既存スライドは ordered_bases が末尾に補う。
-            seen = set()
-            new_order = []
-            for base in order:
-                if base in known and base not in seen:
-                    seen.add(base)
-                    new_order.append(base)
-            manifest["slide_order"] = new_order
-            save_manifest(self.manifest_path, manifest)
+            def _apply(manifest):
+                known = manifest.get("slides", {})
+                # 重複は最初の1件だけ採用し、未指定の既存スライドは ordered_bases が末尾に補う。
+                seen = set()
+                new_order = []
+                for base in order:
+                    if base in known and base not in seen:
+                        seen.add(base)
+                        new_order.append(base)
+                manifest["slide_order"] = new_order
+
+            locked_update(self.manifest_path, _apply)
         return {"ok": True}, 200
 
     def set_removed(self, slide: str, removed: bool) -> tuple[dict, int]:
         with self.manifest_lock:
-            manifest = load_manifest(self.manifest_path)
-            entry = manifest.get("slides", {}).get(slide)
-            if not entry:
+            if slide not in load_manifest(self.manifest_path).get("slides", {}):
                 return {"ok": False, "error": f"unknown slide: {slide}"}, 404
-            if removed:
-                update_entry(
-                    manifest,
-                    slide,
-                    state_before_removal=entry.get("state", "validated"),
-                    state="removed",
-                )
-            else:
-                update_entry(
-                    manifest,
-                    slide,
-                    state=entry.get("state_before_removal", "validated"),
-                )
-            save_manifest(self.manifest_path, manifest)
+
+            def _apply(manifest):
+                entry = manifest.get("slides", {}).get(slide)
+                if not entry:
+                    return
+                if removed:
+                    update_entry(
+                        manifest,
+                        slide,
+                        state_before_removal=entry.get("state", "validated"),
+                        state="removed",
+                    )
+                else:
+                    update_entry(
+                        manifest,
+                        slide,
+                        state=entry.get("state_before_removal", "validated"),
+                    )
+
+            locked_update(self.manifest_path, _apply)
         return {"ok": True}, 200
 
     @staticmethod
@@ -2381,12 +2414,17 @@ def report_feedback(handle) -> int:
         data = json.load(f)
     fb = data.get("feedback", {})
     rebuild = data.get("rebuild", [])
+    attachments = data.get("attachments", {}) or {}
+    global_note = (data.get("global") or "").strip()
     print(f"✅ フィードバック受信: {handle.feedback_path}")
-    targets = sorted(set(fb) | set(rebuild))
+    targets = sorted(set(fb) | set(rebuild) | set(attachments))
     if targets:
-        marks = [(b + " [作り直し]" if b in rebuild else b) for b in targets]
+        marks = [(b + " [作り直し]" if b in rebuild else b)
+                 + (" [添付あり]" if b in attachments else "") for b in targets]
         print(f"   要修正 {len(targets)}枚: {', '.join(marks)}")
-    else:
+    if global_note:
+        print(f"   全体指示: {global_note[:120]}")
+    if not targets and not global_note:
         print("   全スライド校了")
     return 0
 
@@ -2402,20 +2440,16 @@ def serve(session_dir: str, timeout: int, open_browser: bool = True,
                           exit_on_feedback=not persist)
     if not persist:
         # ユーザーが常駐ハブ（別プロセス）から送信した場合は自前サーバの POST が来ないため、
-        # slide_feedback.json の更新も監視して同じ「受信で終了」を成立させる
+        # 未処理キュー（feedback_history のカーソル以降）も監視して「受信で終了」を成立させる
         import time as _time
-        start_ts = _time.time()
+        watch_dir = os.path.realpath(os.path.abspath(session_dir))
 
         def _watch_external():
             while not handle.received.is_set():
-                try:
-                    if (os.path.exists(handle.feedback_path)
-                            and os.path.getmtime(handle.feedback_path) >= start_ts):
-                        handle.received.set()
-                        handle.httpd.shutdown()
-                        return
-                except OSError:
-                    pass
+                if pending_feedback(watch_dir):
+                    handle.received.set()
+                    handle.httpd.shutdown()
+                    return
                 _time.sleep(2)
 
         threading.Thread(target=_watch_external, daemon=True).start()
@@ -2427,27 +2461,32 @@ def serve(session_dir: str, timeout: int, open_browser: bool = True,
 
 
 def await_feedback(session_dir: str, timeout: int) -> int:
-    """常駐ダッシュボード（--persist）への修正指示の送信を待つ軽量プロセス。
+    """修正指示の未処理キューを待つ軽量プロセス。
 
-    起動後に書き込まれた slide_feedback.json を検知したら、その内容を stdout に
-    出して exit 0（= バックグラウンド実行の完了通知でエージェントが動く）。
-    編集が終わったらこのプロセスだけを再起動する。サーバとタブは生き続ける。
+    未処理のフィードバック（feedback_history/ のカーソル以降）が1件でもあれば、
+    全件を古い順に stdout へ出して exit 0（= 完了通知でエージェントが動く）。
+    **起動前に送られていた未処理分も拾う**（mtime 起点ではなくキュー判定）。
+    エージェントは処理後に `--ack-feedback` でカーソルを進め、待ち受けを再起動する。
     """
     import time
-    fb = os.path.join(os.path.realpath(os.path.abspath(session_dir)), "slide_feedback.json")
+    session_dir = os.path.realpath(os.path.abspath(session_dir))
     start = time.time()
     print("⏳ 修正指示の送信を待っています（ダッシュボードは開いたまま使えます）", flush=True)
     while time.time() - start < timeout:
-        try:
-            if os.path.exists(fb) and os.path.getmtime(fb) >= start:
-                time.sleep(0.3)  # 書き込み完了を待つ
-                with open(fb, "r", encoding="utf-8") as f:
-                    content = f.read()
-                print("✅ フィードバック受信:")
-                print(content)
-                return 0
-        except OSError:
-            pass
+        pend = pending_feedback(session_dir)
+        if pend:
+            time.sleep(0.3)  # 書き込み完了を待つ
+            pend = pending_feedback(session_dir)
+            print(f"✅ 未処理フィードバック {len(pend)}件（古い順に処理し、"
+                  "完了後に --ack-feedback を実行してください）:")
+            for p in pend:
+                print(f"--- {os.path.basename(p)}")
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        print(f.read())
+                except OSError as e:
+                    print(f"(読み取り失敗: {e})")
+            return 0
         time.sleep(1)
     print("⏰ タイムアウト（フィードバック未受信）")
     return 2
@@ -2462,7 +2501,11 @@ def main() -> int:
                     help="--serve を常駐化: 修正指示を受信しても終了しない"
                          "（通知は --await-feedback プロセスが担う）")
     ap.add_argument("--await-feedback", action="store_true",
-                    help="常駐ダッシュボードへの修正指示の送信を待ち、受信で終了する軽量プロセス")
+                    help="修正指示の未処理キューを待ち、あれば全件出力して終了する軽量プロセス")
+    ap.add_argument("--pending", action="store_true",
+                    help="未処理フィードバックの一覧を表示して終了（0=あり, 2=なし）")
+    ap.add_argument("--ack-feedback", action="store_true",
+                    help="未処理フィードバックを処理済みにする（編集・検証の完了後に実行）")
     ap.add_argument("--serve-timeout", type=int, default=3600, help="--serve の待ち上限秒")
     ap.add_argument("--no-open", action="store_true",
                     help="OS ブラウザを自動で開かない（エージェントの内蔵ブラウザで開く場合用）")
@@ -2470,6 +2513,23 @@ def main() -> int:
     ap.add_argument("--output", help="静的モードの出力先（デフォルト: <session-dir>/review.html）")
     ap.add_argument("--open", action="store_true", help="静的モードで生成後にブラウザで開く")
     args = ap.parse_args()
+
+    if args.ack_feedback:
+        n = ack_feedback(args.session_dir)
+        print(f"✅ {n}件のフィードバックを処理済みにしました")
+        return 0
+
+    if args.pending:
+        pend = pending_feedback(args.session_dir)
+        if not pend:
+            print("未処理のフィードバックはありません")
+            return 2
+        print(f"未処理フィードバック {len(pend)}件（古い順）:")
+        for p in pend:
+            print(f"--- {os.path.basename(p)}")
+            with open(p, "r", encoding="utf-8") as f:
+                print(f.read())
+        return 0
 
     if args.await_feedback:
         return await_feedback(args.session_dir, args.serve_timeout)
