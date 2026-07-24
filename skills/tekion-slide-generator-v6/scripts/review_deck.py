@@ -243,6 +243,19 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .proof.has-ink .slip .send { opacity: 1; }
   .proof.has-ink .slip .send:hover { background: var(--red); color: #fff; }
 
+  #dead-overlay {
+    display: none; position: fixed; inset: 0; z-index: 100;
+    background: #1e293bd9; backdrop-filter: blur(4px) grayscale(1);
+    align-items: center; justify-content: center;
+  }
+  #dead-overlay.show { display: flex; }
+  #dead-overlay .box {
+    background: var(--paper); border-radius: 16px; padding: 36px 44px;
+    max-width: 460px; text-align: center; box-shadow: 0 20px 60px #0009;
+  }
+  #dead-overlay h2 { margin: 0 0 10px; font-size: 18px; }
+  #dead-overlay p { margin: 0; color: var(--sub); font-size: 13.5px; line-height: 1.9; }
+
   footer.hint { text-align: center; color: var(--sub); font-size: 12.5px;
                 padding: 0 24px 48px; letter-spacing: .03em; }
 
@@ -432,6 +445,12 @@ __SITES_LOGO__<a href="https://tekion.jp" target="_blank" rel="noopener">tekion.
   <a href="https://ai-agent.co.jp" target="_blank" rel="noopener">ai-agent.co.jp</a>
 </footer>
 
+<div id="dead-overlay"><div class="box">
+  <h2>このタブは古いセッションです</h2>
+  <p>ダッシュボードのサーバとの接続が切れました。<br>
+  最新のタブを使うか、エージェントに「ダッシュボードを開いて」と<br>頼んで開き直してください。このタブは閉じて構いません。</p>
+</div></div>
+
 <button id="reload-banner" onclick="location.reload()">デッキが更新されました — 再読み込み</button>
 <div id="drop-overlay"><div class="box">ここにドロップして読み込み<br>
 <small>.pptx / .pdf は1枚ずつのスライドに分解 / PNG・JPG は1枚のスライドとして追加</small></div></div>
@@ -451,6 +470,7 @@ if (!SERVED) {
 /* --- 生成実況: /status をポーリングして進捗表示・自動更新 --- */
 let lastSig = null;
 let submitted = false;
+let pollFails = 0;
 function hasUserInput() {
   if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') return true;
   return [...document.querySelectorAll('textarea[data-slide]')].some(t => t.value.trim());
@@ -506,7 +526,13 @@ async function pollStatus() {
       if (!hasUserInput()) location.reload();
       else document.getElementById('reload-banner').classList.add('show');
     }
-  } catch (e) { /* サーバ終了後は静かに止める */ }
+    pollFails = 0;
+  } catch (e) {
+    // 連続で応答が無ければサーバ消失 = このタブは古い。明示して操作を止める
+    if (++pollFails >= 3 && !submitted) {
+      document.getElementById('dead-overlay').classList.add('show');
+    }
+  }
 }
 if (SERVED) setInterval(pollStatus, 2500);
 
