@@ -718,14 +718,21 @@ async function importFiles(files) {
   const valid = files.filter(f => IMPORT_EXTS.some(x => f.name.toLowerCase().endsWith(x)));
   if (!valid.length) { alert('対応形式: ' + IMPORT_EXTS.join(' / ')); return; }
   const btn = document.getElementById('import-btn');
+  // トップ（ハブ）では新しいセッションとして開く。デッキ画面では現在のデッキ末尾に追加。
+  const newSession = document.body.classList.contains('page-home');
   btn.textContent = '読み込み中…';
   try {
-    const payload = { files: [] };
+    const payload = { mode: newSession ? 'new_session' : 'append', files: [] };
     for (const f of valid) payload.files.push({ name: f.name, data_b64: await readAsB64(f) });
     const res = await fetch('/import', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const result = await res.json();
     if (!res.ok || !result.ok) throw new Error(result.error || res.status);
+    if (result.url) {  // 新しいセッションが立ち上がった → そのままそのデッキへ移動
+      btn.textContent = '開いています…';
+      location.href = result.url;
+      return;
+    }
     alert(result.added + '枚を取り込みました' +
           (result.skipped ? '（' + result.skipped + '枚は画像が抽出できずスキップ）' : ''));
     location.reload();
@@ -930,6 +937,36 @@ PLACEHOLDER_RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__"><spa
 THUMB_MAIN_W = 1600   # メイン表示
 THUMB_VER_W = 480     # バージョンタイムライン
 THUMB_RAIL_W = 320    # 索引レール
+
+CLOUD_MARKERS = ("/Library/CloudStorage/", "/Dropbox/", "/OneDrive")
+
+
+def _spawn_child_server(target: str) -> str | None:
+    """別セッションのダッシュボードを独立プロセスで起動し、その URL を返す。
+
+    起動した子サーバは親と独立（start_new_session）なので、親が終了しても生き続ける。
+    """
+    import tempfile as _tf
+    import time as _time
+    url_tmp = _tf.mktemp(suffix=".url")
+    subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                      "--session-dir", target, "--serve",
+                      "--serve-timeout", "7200", "--no-open", "--url-file", url_tmp],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    child_url = None
+    for _ in range(40):
+        _time.sleep(0.25)
+        if os.path.exists(url_tmp):
+            with open(url_tmp, "r", encoding="utf-8") as f:
+                child_url = f.read().strip()
+            if child_url:
+                break
+    try:
+        os.unlink(url_tmp)
+    except OSError:
+        pass
+    return child_url
 
 
 def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -> str:
@@ -1346,7 +1383,20 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
             if self.path == "/import":
                 import base64
                 files = payload.get("files", [])
-                imports_dir = os.path.join(session_dir, "imports")
+                # トップ（ハブ）からの読み込み = 新しいセッションとして開く。
+                # デッキ画面からの読み込み = 現在のデッキ末尾に追加する。
+                new_session = payload.get("mode") == "new_session"
+                if new_session:
+                    from datetime import datetime as _dt
+                    parent = os.path.dirname(session_dir)
+                    if any(mk in parent for mk in CLOUD_MARKERS):
+                        parent = os.path.expanduser(
+                            "~/Documents/TEKION-Slide-Sessions/slides_output")
+                    target_dir = os.path.join(parent, _dt.now().strftime("%Y-%m-%d_%H%M%S"))
+                    os.makedirs(target_dir, exist_ok=True)
+                else:
+                    target_dir = session_dir
+                imports_dir = os.path.join(target_dir, "imports")
                 os.makedirs(imports_dir, exist_ok=True)
                 added = skipped = 0
                 try:
@@ -1360,7 +1410,7 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                         with open(saved, "wb") as f:
                             f.write(base64.b64decode(item.get("data_b64", "")))
                         with manifest_lock:
-                            result = import_file(saved, session_dir)
+                            result = import_file(saved, target_dir)
                         added += len(result["added"])
                         skipped += len(result["skipped"])
                         print(f"📥 取り込み: {name} → {len(result['added'])}枚")
@@ -1368,35 +1418,28 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                     print(f"⚠️  取り込み失敗: {type(e).__name__}: {e}")
                     self._respond_json({"ok": False, "error": str(e)}, 500)
                     return
-                self._respond_json({"ok": True, "added": added, "skipped": skipped})
+                url = None
+                if new_session and added > 0:
+                    try:
+                        from session_registry import upsert as _registry_up
+                        _registry_up(target_dir)
+                    except Exception:
+                        pass
+                    url = _spawn_child_server(target_dir)
+                    if not url:
+                        self._respond_json({"ok": False,
+                                            "error": "新しいセッションの起動に失敗しました"}, 500)
+                        return
+                    print(f"📂 新しいセッションとして取り込み: {target_dir} → {url}")
+                self._respond_json({"ok": True, "added": added, "skipped": skipped, "url": url})
                 return
 
             if self.path == "/open-session":
-                import subprocess as _sp
-                import tempfile as _tf
-                import time as _time
                 target = os.path.realpath(str(payload.get("path", "")))
                 if not os.path.exists(os.path.join(target, "manifest.json")):
                     self._respond_json({"ok": False, "error": "session not found"}, 404)
                     return
-                url_tmp = _tf.mktemp(suffix=".url")
-                _sp.Popen([sys.executable, os.path.abspath(__file__),
-                           "--session-dir", target, "--serve",
-                           "--serve-timeout", "7200", "--no-open", "--url-file", url_tmp],
-                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                          start_new_session=True)
-                child_url = None
-                for _ in range(40):
-                    _time.sleep(0.25)
-                    if os.path.exists(url_tmp):
-                        with open(url_tmp, "r", encoding="utf-8") as f:
-                            child_url = f.read().strip()
-                        if child_url:
-                            break
-                try:
-                    os.unlink(url_tmp)
-                except OSError:
-                    pass
+                child_url = _spawn_child_server(target)
                 if not child_url:
                     self._respond_json({"ok": False, "error": "起動がタイムアウトしました"}, 500)
                     return
@@ -1417,8 +1460,7 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
         def log_message(self, *a):
             pass
 
-    cloud_markers = ("/Library/CloudStorage/", "/Dropbox/", "/OneDrive")
-    if any(mk in session_dir for mk in cloud_markers):
+    if any(mk in session_dir for mk in CLOUD_MARKERS):
         print("⚠️  セッションがクラウド同期フォルダ配下にあります。同期による manifest の"
               "巻き戻り・書き込み瞬断が起き得ます。セッションはローカルディスクに作り、"
               "完成した PPTX/PDF だけをクラウドへ置くことを推奨します")
