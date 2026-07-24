@@ -31,8 +31,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest_utils import (
-    classify_error, get_entry, load_manifest, next_version_path, prompt_hash,
-    save_manifest, set_session_status, summarize, update_entry, validate_image,
+    classify_error, get_entry, load_manifest, locked_update, next_version_path,
+    prompt_hash, save_manifest, set_session_status, summarize, update_entry,
+    validate_image,
 )
 
 PARALLEL_CAP_DEFAULT = 20  # 実測: 2K・並列20で throttle なし（20枚/68秒）
@@ -286,6 +287,7 @@ def build_tasks(prompt_files, args, manifest, images_dir, raw_dir,
                      prompt_file=os.path.abspath(prompt_file))
         tasks.append({
             'slide_base': slide_base,
+            'prompt_sha256': p_hash,
             'prompt': prompt,
             'prompt_file': prompt_file,
             'output_path': output_path,
@@ -317,37 +319,50 @@ def run_pass(tasks, args, retry_script, per_slide_timeout, gate, abort_event,
             slide_base = result['slide_base']
             completed += 1
 
+            # 保存は locked_update で「このスライドのフィールドだけ」を最新 manifest に
+            # マージする。メモリ上の古い manifest 全体を保存すると、生成中に自動ワーカー・
+            # ダッシュボードが行った編集・削除・並べ替えを巻き戻すため（lost update）
             if result.get('skipped'):
-                update_entry(manifest, slide_base, state='failed',
-                             last_error='aborted before start', last_error_kind='aborted')
+                manifest = locked_update(
+                    manifest_path,
+                    lambda m: update_entry(m, slide_base, state='failed',
+                                           last_error='aborted before start',
+                                           last_error_kind='aborted'))
                 failed_tasks.append(task)
                 continue
 
-            entry = get_entry(manifest, slide_base)
-            attempts = entry.get('attempts', 0) + 1
             if result['success']:
-                versions = entry.get('versions', [])
-                if task['output_path'] not in versions:
-                    versions = versions + [task['output_path']]
                 raw_path = (os.path.join(task['raw_dir'], os.path.basename(task['output_path']))
                             if task['raw_dir'] else None)
-                update_entry(manifest, slide_base,
-                             state='validated', attempts=attempts,
-                             current_image=task['output_path'],
-                             raw_image=raw_path if raw_path and os.path.exists(raw_path) else entry.get('raw_image'),
-                             versions=versions,
-                             last_error=None, last_error_kind=None)
+
+                def _apply_ok(m):
+                    fresh = get_entry(m, slide_base)
+                    versions = fresh.get('versions', [])
+                    if task['output_path'] not in versions:
+                        versions = versions + [task['output_path']]
+                    update_entry(m, slide_base,
+                                 state='validated',
+                                 attempts=fresh.get('attempts', 0) + 1,
+                                 current_image=task['output_path'],
+                                 raw_image=raw_path if raw_path and os.path.exists(raw_path)
+                                 else fresh.get('raw_image'),
+                                 versions=versions,
+                                 last_error=None, last_error_kind=None)
+
+                manifest = locked_update(manifest_path, _apply_ok)
                 print(f"✓ [{completed}/{len(tasks)}] {slide_base}.png")
             else:
-                update_entry(manifest, slide_base,
-                             state='failed', attempts=attempts,
-                             last_error=(result.get('error') or '')[:500],
-                             last_error_kind=result.get('kind'))
+                def _apply_ng(m):
+                    fresh = get_entry(m, slide_base)
+                    update_entry(m, slide_base,
+                                 state='failed', attempts=fresh.get('attempts', 0) + 1,
+                                 last_error=(result.get('error') or '')[:500],
+                                 last_error_kind=result.get('kind'))
+
+                manifest = locked_update(manifest_path, _apply_ng)
                 failed_tasks.append(task)
                 short_err = (result.get('error') or 'unknown').strip().splitlines()[-1][:120]
                 print(f"✗ [{completed}/{len(tasks)}] {slide_base}.png - {short_err}")
-
-            save_manifest(manifest_path, manifest)
     return failed_tasks
 
 
@@ -415,7 +430,15 @@ def main():
 
     tasks, skipped = build_tasks(prompt_files, args, manifest, args.output_dir, raw_dir,
                                  grounding_map, ref_image_map)
-    save_manifest(manifest_path, manifest)
+    if tasks:
+        # 古い manifest 全体を保存せず、今回のタスク分のフィールドだけを最新へマージする
+        def _register_pending(m):
+            for t in tasks:
+                update_entry(m, t['slide_base'], state='pending',
+                             prompt_sha256=t['prompt_sha256'],
+                             prompt_file=os.path.abspath(t['prompt_file']))
+
+        manifest = locked_update(manifest_path, _register_pending)
 
     # ダッシュボードは何より先に起動する（認証ウォームアップや生成を待たせない）
     dashboard = None

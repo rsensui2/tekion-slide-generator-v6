@@ -16,6 +16,15 @@ Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF �
 
 ## インストール
 
+### 初回のみ: 常駐ハブのセットアップ
+
+ダッシュボードは固定URL `http://127.0.0.1:7799/` の常駐ハブで動く（修正指示の自動処理・
+タブの自動更新・全セッション一覧はハブの機能）。初回に1度だけ:
+
+```bash
+bash skills/tekion-slide-generator-v6/scripts/install_hub.sh   # macOS: launchd に常駐登録
+```
+
 > 🎓 **受講生に配る場合**: [docs/INSTALL_PROMPT.md](docs/INSTALL_PROMPT.md) のプロンプトを
 > Claude Code / Codex に貼り付けてもらうだけで、エージェントがインストールから使い方の案内まで行う。
 

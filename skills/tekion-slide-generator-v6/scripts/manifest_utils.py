@@ -44,15 +44,23 @@ def prompt_hash(prompt_text: str, extra: str = "") -> str:
 
 
 def load_manifest(path: str) -> dict:
-    """manifest を読み込む。無ければ空の台帳を返す。"""
-    if os.path.exists(path):
+    """manifest を読み込む。無ければ空の台帳を返す。
+
+    破損していた場合は直近の保存時に残したバックアップ（.bak）から復旧する
+    （空台帳で上書きすると versions・並び順・removed が全部消えるため）。
+    """
+    for candidate in (path, path + ".bak"):
+        if not os.path.exists(candidate):
+            continue
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(candidate, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict) and "slides" in data:
+                if candidate != path:
+                    print(f"⚠️  manifest が破損していたため .bak から復旧しました: {path}")
                 return data
         except (json.JSONDecodeError, OSError):
-            pass  # 壊れた manifest は作り直す（画像はディスク検証で拾える）
+            continue
     return {"version": MANIFEST_VERSION, "created_at": now_iso(), "slides": {}}
 
 
@@ -93,6 +101,13 @@ def save_manifest(path: str, manifest: dict) -> None:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
+            # 破損復旧用バックアップ（現行の正常な manifest を .bak に残してから置換）
+            if os.path.exists(path):
+                try:
+                    import shutil as _shutil
+                    _shutil.copy2(path, path + ".bak")
+                except OSError:
+                    pass
             os.replace(tmp_path, path)
             try:
                 from session_registry import upsert as _registry_upsert
@@ -190,10 +205,17 @@ def classify_error(error_msg: str) -> str:
 
 
 def next_version_path(images_dir: str, slide_base: str, versions: list) -> tuple[str, int]:
-    """次のバージョンの出力パスを決める。v1 は `<base>.png`、以降 `<base>_vN.png`。"""
+    """次のバージョンの出力パスを決める。v1 は `<base>.png`、以降 `<base>_vN.png`。
+
+    manifest の versions 数だけでなく実ファイルの存在も見る（並列の生成と編集が
+    同じ番号を選んで既存版を上書きしないため。欠番があっても衝突しない）。
+    """
     n = len(versions) + 1
-    if n == 1:
+    if n == 1 and not os.path.exists(os.path.join(images_dir, f"{slide_base}.png")):
         return os.path.join(images_dir, f"{slide_base}.png"), 1
+    n = max(n, 2)
+    while os.path.exists(os.path.join(images_dir, f"{slide_base}_v{n}.png")):
+        n += 1
     return os.path.join(images_dir, f"{slide_base}_v{n}.png"), n
 
 
@@ -233,9 +255,14 @@ def collect_current_images(manifest_path: str, allow_partial: bool = False):
 
     slides = manifest.get("slides", {})
     bases = ordered_bases(manifest)
-    incomplete = sorted(b for b in bases
-                        if slides[b].get("state") != "validated"
-                        or not slides[b].get("current_image"))
+    # 「validated と記録されている」だけでなく実ファイルの健全性も確認する。
+    # ファイル消失・破損を黙って除外すると「N枚頼んだのに N-1 枚の deck」が
+    # 成功として出てしまう（ゼロ欠損保証の穴）
+    incomplete = sorted(
+        b for b in bases
+        if slides[b].get("state") != "validated"
+        or not slides[b].get("current_image")
+        or validate_image(slides[b]["current_image"]) is not None)
     if incomplete and not allow_partial:
         return None, incomplete
 
@@ -243,7 +270,7 @@ def collect_current_images(manifest_path: str, allow_partial: bool = False):
     for base in bases:
         entry = slides[base]
         img = entry.get("current_image")
-        if entry.get("state") == "validated" and img and os.path.exists(img):
+        if base not in incomplete and img:
             files.append(img)
     return files, incomplete
 

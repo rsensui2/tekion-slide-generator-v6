@@ -179,3 +179,19 @@
 - 静的 HTML モードと `generate_slides_parallel.py --with-dashboard`
 
 なお、末尾の旧実装手順にある git 操作は、今回の実行指示で明示的に禁止されたため実施しない。
+
+## 現行実装ノート（2026-07-25 更新）
+
+初期設計から次の点が進化している（上の記述より本ノートが優先）:
+
+- **フィードバックはハブが自動処理する**: `/feedback` 保存後、ハブが `feedback_worker.py` を
+  切り離し起動。エージェントの待ち受けは不要になった（`--await-feedback` はハブ無し
+  フォールバック用として残存）
+- **未処理判定は mtime 比較ではなくキュー**: `feedback_history/` + 処理済みカーソル
+  （`.processed`）。CLI は `--pending` / `--ack-feedback`
+- **dead-letter**: ワーカーが失敗させた送信は `feedback_history/failed/` へ移り、
+  エージェントが「続きを」で引き継ぐ。ack で `failed/archived/` へ
+- **manifest の排他**: すべての read-modify-write は `locked_update()`（flock +
+  保存直前の再読込）経由。生成・編集・ハブ操作・ワーカーが並走しても巻き戻らない
+- **ワーカーの直列化**: `.worker.lock` のブロッキング flock（後発は先行完了を待って
+  キューを再確認）

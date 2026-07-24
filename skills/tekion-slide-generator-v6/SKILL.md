@@ -11,7 +11,7 @@ Markdown/テキストから日本語プレゼンスライド（16:9）を生成�
 |---|---|
 | フルスロットル並列 | `--max-parallel auto` = 枚数ぶん一斉ファンアウト（上限20）。429検知で自動減速 |
 | ゼロ欠損保証 | manifest（台帳）+ 生成後の機械検証 + 検証スイープ + resume |
-| 直せる | 差分編集（現行画像参照）・赤ペン編集・バージョニング・ロールバック |
+| 直せる | 作り直し（既定）・参照つき微修正・赤ペン編集・バージョニング・ロールバック |
 | 同じ顔 | 構造化デザインシステムの全プロンプト同一注入（スタイルアンカーはオプトイン） |
 
 Codex を呼ぶコマンドの直前では `unset OPENAI_API_KEY` する（各 Phase のコマンドに含めてある。
@@ -77,7 +77,7 @@ content_suffix: "※スライド上の全テキストは{lang}で表示するこ
 ## Pre-flight
 
 ```bash
-command -v codex >/dev/null && [ -f ~/.codex/auth.json ] && echo "codex OK" || echo "STOP: codex 未導入/未ログイン"
+command -v codex >/dev/null && [ -f "${CODEX_HOME:-$HOME/.codex}/auth.json" ] && echo "codex OK" || echo "STOP: codex 未導入/未ログイン"
 python3 -c "import PIL, pptx, requests, jinja2; print('OK')" 2>/dev/null || bash "${SKILL_DIR}/scripts/setup.sh"
 ```
 
@@ -110,50 +110,35 @@ healthz の `version` が現在のプラグイン（`${SKILL_DIR}/../../.codex-p
 healthz が失敗した場合、または version が違う場合:
 
 - **Claude Code**: `bash "${SKILL_DIR}/scripts/install_hub.sh"` を1回実行する
-- **Codex**: ユーザーに「ターミナルで `bash <skill>/scripts/install_hub.sh` を1回実行してください
-  （初回のみ）」と案内する。起動までのフォールバックは従来の
-  `review_deck.py --serve`（前面）または Phase 7 の `--with-dashboard`
+- **Codex**（サンドボックス内から launchd 登録はできない）: ユーザーに「ターミナルで
+  `bash <skill>/scripts/install_hub.sh` を1回実行してください（初回のみ）」と案内し、
+  それまでは下の「ハブ無しフォールバック」で進める
 
-**ブラウザは会話の最初の1回だけ開く**。タスク開始時に次を1回だけ確認する:
+**ブラウザは会話の最初の1回だけ開く**:
 
 ```bash
 curl -fsS "${DECK_URL}viewers"
 ```
 
-- `{"active": false}`: Claude は `open "${DECK_URL}"`、Codex はアプリ内 Browser で開くか URL を提示する
-- `{"active": true}`: 既にユーザーが見ているため何も開かない
-- 同じタスク中は、生成・修正後も二度と開き直さない。表示中のタブが `/status` のポーリングで反映を拾う
+`{"active": false}` のときだけ開く（Claude は `open "${DECK_URL}"`、Codex はアプリ内 Browser か
+URL 提示）。`true` なら既にユーザーが見ている。以後このタスク中は二度と開かない —
+生成・修正の反映は表示中のタブが自動で拾う。
 
-**修正指示の処理はハブが自動で行う**（送信 → ハブが feedback_worker を起動 →
-edit_slide で反映 → タブに自動反映）。**エージェントの待ち受けは不要** — デッキ URL を
-提示したら、通常どおり応答を終えてよい。チャットを閉じても赤入れループは回り続ける。
-
-- ワーカーで扱えない依頼（構成・枚数の変更、質の判断が要る依頼）はユーザーが
-  チャットで「続きを」と言う。そのときは未処理キューを確認して処理する:
-
-```bash
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --pending   # 未処理を古い順に表示
-# → 内容ごとに Phase 8 の編集を実行し、完了したら:
-${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --ack-feedback
-```
-
-**ハブが無い環境のフォールバック**（従来フロー。ワーカーも動かないため待ち受けが必要）:
-- Claude Code: `--serve --persist`（バックグラウンド）+ `--await-feedback --serve-timeout 28800`（バックグラウンド）
-- Codex: 生成は Phase 7 の `--with-dashboard`、レビュー待ちは
-  `--await-feedback --serve-timeout 300` を前面実行。exit 0 → 編集して `--ack-feedback` → 待機に戻る。
-  exit 2 → 1回だけ自動で再実行（計600秒）。それでも無ければ待機を終了する
-  （1ターンの待機は合計30分まで。ユーザーが明示的に延長を頼んだ時だけ新しい待機枠を開く）。
-  終了時は「修正指示は保存されます。続きは『続きを』で再開できます」と必ず案内する
-
-固定ハブ `http://127.0.0.1:7799/` のスタート画面では、ユーザーは2つの入り口を選べる:
-
-- **既存デッキを読み込む**: ユーザーが PPTX/PDF/画像をドロップ → 1枚ずつのスライドに分解されて
-  スライドダッシュボードに並ぶ。この場合 Phase 2〜7 は不要で、そのまま Phase 8（赤入れ → 差分編集）に入る
-- **新しく作る**: このまま Phase 2 以降を進める。**Phase 7 の生成進捗はスライドダッシュボードに実況される**
-  （「生成中 n / N」表示、完成したスライドから順に画面に現れる）
-
-修正指示はハブが自動処理する（Phase 8 参照）。生成前・生成中に届いた指示も
+**修正指示の処理はハブが自動で行う**ので、エージェントの待ち受けは不要 — デッキ URL を
+提示したら応答を終えてよい（詳細と例外は Phase 8）。生成前・生成中に届いた指示も
 未処理キューに積まれ、順に処理される。
+
+**ハブ無しフォールバック**（従来フロー。自動処理も動かないため待ち受けが必要）:
+- Claude Code: `--serve --persist` と `--await-feedback --serve-timeout 28800` をバックグラウンドで
+- Codex: 生成は Phase 7 に `--with-dashboard` を付け、レビュー待ちは
+  `--await-feedback --serve-timeout 300` を前面実行。exit 0 → Phase 8 の編集 → `--ack-feedback` → 待機に戻る。
+  exit 2 → 1回だけ再実行（計600秒）。それでも無ければ待機を終了する
+  （1ターンの待機は合計30分まで。ユーザーが明示的に延長を頼んだ時だけ延長）。
+  終了時は「修正指示は保存されます。『続きを』で再開できます」と必ず案内する
+
+既存デッキの改修はユーザーがハブに PPTX/PDF/画像をドロップするだけで始まる
+（Phase 2〜7 不要 → そのまま赤入れループへ）。新規生成の進捗は「生成中 n / N」として
+ハブに実況され、完成したスライドから順に画面に現れる。
 
 ## Phase 2: デザインガイドライン作成
 
@@ -325,10 +310,8 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
   --logo "${LOGO}"
 ```
 
-固定ハブが稼働していれば `--with-dashboard` は不要。ハブが manifest をポーリングして実況する。
-ハブ未導入・停止中のフォールバックでだけ `--with-dashboard` を付ける。生成前に従来サーバが
-起動し、生成後はレビュー送信までブロックする（`--dashboard-timeout` 既定 7200 秒。
-内蔵ブラウザで開くなら `--dashboard-no-open`）。
+ハブ稼働中は `--with-dashboard` 不要（実況はハブが出す）。ハブ無しフォールバック時のみ付ける
+（生成前に従来サーバが起動し、生成後はレビュー送信までブロック。内蔵ブラウザなら `--dashboard-no-open`）。
 
 - `resolve_brand.py` がアクティブプリセットの `<slug>.config.json` から `LOGO` /
   `SLIDE_LOGO_POSITION` / `SLIDE_LOGO_SCALE`（/ `SLIDE_FOOTER_TEXT`）を解決する
@@ -395,16 +378,14 @@ ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" -
 - `global` = デッキ全体への一括指示。**全スライド**（個別指示があるものはその指示と連結）に
   適用する。`global_keep_reference` が false なら各スライドを `--rebuild` で、true なら
   差分編集で回す。枚数が多い場合は数枚ずつ並列に実行してよい
+- ペイロードの外の依頼も2つ覚えておく: ユーザーが画像に赤で書き込んで渡してきたら
+  赤ペン編集（`--annotated`）。文字構成から変えたい依頼は slides_plan.json を修正して
+  Phase 4→7 を再実行（resume で該当スライドだけ生成される）
+
 編集がすべて済んだら `--ack-feedback` でカーソルを進める（開いているタブは manifest の
 変化を検知して自動更新されるので、サーバの開き直しは不要）。すべて空 = 全スライド校了。
 自分でも生成画像を Read で目視し、明白な問題（文字化け・欠け）は聞かれる前に直す。
 複数スライドを並列で編集してよい（manifest は flock で排他済み）。
-
-修正の種類で使い分ける:
-- デフォルト（rebuild 指定）→ 作り直し（--rebuild。元プロンプト+指示で再生成）
-- 「🔗 参照して微修正」指定（rebuild に無い feedback）→ 指示編集（現行画像参照）
-- ユーザーが画像に赤で書き込んで指示 → 赤ペン編集
-- 文字構成から変えたい → slides_plan.json を修正して Phase 4→7 を再実行（resume で該当スライドだけ生成される）
 
 ```bash
 # 指示編集: 現行スライド（raw）を参照に、指示された変更のみ適用

@@ -26,13 +26,20 @@
      /plugin marketplace add rsensui2/tekion-slide-generator-v6
      /plugin install tekion-slide-generator@tekion-slide-generator
 
-3. Python の依存を確認してください:
+3. 常駐ダッシュボード（TEKION Slides Hub）を登録してください（macOSのみ・初回1回）:
+     インストールしたプラグインのスキルフォルダにある scripts/install_hub.sh を実行する。
+     例: bash ~/.codex/plugins/cache/tekion-slide-generator/*/*/skills/tekion-slide-generator-v6/scripts/install_hub.sh
+     成功すると http://127.0.0.1:7799/ が常駐し、修正指示の自動処理・タブ自動更新が有効になる。
+     （Linux/WSL ではスキップし、フォールバック動作になる旨を伝える）
+
+4. Python の依存を確認してください:
      python3 -c "import PIL, pptx" が失敗する場合は pip3 install pillow python-pptx
 
-4. インストール結果を確認して報告してください（plugin list に tekion-slide-generator が表示されること）。
+5. インストール結果を確認して報告してください（plugin list に tekion-slide-generator が表示されること）。
 
-5. 最後に、ユーザーへ以下を案内してください:
+6. 最後に、ユーザーへ以下を案内してください:
    - スキルを有効にするため、新しいセッション（チャット）を開き直すこと
+   - ダッシュボードは http://127.0.0.1:7799/ をブックマークすれば常に開ける
    - 使い方は3つの言葉だけ:
      ・「◯◯のスライドを作って」 → 生成が始まり、ブラウザに「スライドダッシュボード」が開く。
         赤い記入欄に修正指示を書いて ⏎ するとAIが直す。右上から PPTX/PDF をダウンロード

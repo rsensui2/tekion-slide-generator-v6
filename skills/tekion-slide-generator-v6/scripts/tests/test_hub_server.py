@@ -94,11 +94,18 @@ class HubServerIntegrationTest(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def _make_image(self, path: Path, color: tuple[int, int, int], label: str):
-        image = Image.new("RGB", (320, 180), color)
+        # export 前検証（30KB以上・非単色・16:9）を通るサイズ・複雑さにする
+        import random
+        rnd = random.Random(hash(label) & 0xFFFF)
+        image = Image.new("RGB", (1280, 720), color)
         draw = ImageDraw.Draw(image)
-        draw.rectangle((24, 24, 296, 156), outline=(255, 255, 255), width=4)
-        draw.text((40, 78), label, fill=(255, 255, 255))
-        image.save(path)
+        for x in range(0, 1280, 32):
+            for y in range(0, 720, 32):
+                draw.rectangle((x, y, x + 31, y + 31),
+                               fill=(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)))
+        draw.rectangle((96, 96, 1184, 624), outline=(255, 255, 255), width=12)
+        draw.text((160, 320), label, fill=(255, 255, 255))
+        image.save(path, compress_level=0)
 
     def _make_session(self, name: str, title: str, bases: list[str]) -> Path:
         session = self.root / "slides_output" / name

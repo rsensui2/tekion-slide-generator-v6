@@ -53,6 +53,12 @@ if [[ -d "${SKILL_DIR}/assets/ui" ]]; then
     [[ -f "$source" ]] && cp -f -- "$source" "${HUB_ROOT}/assets/ui/"
   done
 fi
+# デフォルトロゴ等のトップレベルアセットもコピーする
+# （runtime の resolve_brand.py は <hub-root>/assets/logo.png を既定にするため、
+#  無いと自動ワーカーの編集でロゴが再合成できず消える）
+for source in "${SKILL_DIR}/assets"/*; do
+  [[ -f "$source" ]] && cp -f -- "$source" "${HUB_ROOT}/assets/"
+done
 
 VERSION="$(
   python3 -c 'import json, pathlib, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("version", "6.0.0"))' \

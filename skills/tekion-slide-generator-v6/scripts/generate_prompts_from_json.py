@@ -521,17 +521,36 @@ def main():
     if failed_count > 0:
         sys.exit(1)
 
-    # ダッシュボード実況: 全スライドをプレースホルダー登録（生成前から枠が見える）
+    # 計画から外れた古いプロンプトを掃除する（残すと Phase 7 が旧スライドまで生成し、
+    # export にも混入する）。今回の slides_plan にあるファイル名だけを正とする
+    planned_bases = {
+        f"{extract_file_basename(slide.get('source_file', ''))}_{slide.get('_file_slide_number', 1):02d}"
+        for slide in slides
+    }
+    removed_stale = []
+    for txt in Path(output_dir).glob("*.txt"):
+        if txt.stem not in planned_bases:
+            try:
+                txt.unlink()
+                removed_stale.append(txt.stem)
+            except OSError:
+                pass
+    if removed_stale:
+        print(f"🧹 計画外の古いプロンプトを削除: {', '.join(sorted(removed_stale))}")
+
+    # ダッシュボード実況: 全スライドをプレースホルダー登録（生成前から枠が見える）。
+    # 保存は locked_update（生成・編集・ハブ操作との lost update 防止）
     try:
-        from manifest_utils import load_manifest, save_manifest, get_entry, update_entry
+        from manifest_utils import locked_update, get_entry, update_entry
         manifest_path = session_dir / "manifest.json"
-        manifest = load_manifest(str(manifest_path))
-        for slide in slides:
-            base = f"{extract_file_basename(slide.get('source_file', ''))}_{slide.get('_file_slide_number', 1):02d}"
-            entry = get_entry(manifest, base)
-            if entry.get("state") != "validated":
-                update_entry(manifest, base, state="planned")
-        save_manifest(str(manifest_path), manifest)
+
+        def _register_planned(m):
+            for base in planned_bases:
+                entry = get_entry(m, base)
+                if entry.get("state") != "validated":
+                    update_entry(m, base, state="planned")
+
+        locked_update(str(manifest_path), _register_planned)
         set_session_status(str(session_dir), "prompted",
                            f"プロンプト生成完了。画像生成の開始を待機中", total=len(slides))
     except Exception as e:

@@ -779,7 +779,8 @@ async function pollStatus() {
     const res = await fetch(BASE + '/status');
     const st = await res.json();
     if (!submitted) updateGenProgress(st);
-    const sig = st.slides.map(s => s.base + ':' + s.state + ':' + s.versions).join('|');
+    const sig = st.slides.map(s => s.base + ':' + s.state + ':' + s.versions + ':' + (s.current || ''))
+      .join('|') + '#' + (st.order || []).join(',');
     if (lastSig === null) { lastSig = sig; return; }
     if (sig !== lastSig) {
       lastSig = sig;
@@ -913,6 +914,7 @@ async function selectVersion(node) {
       try { detail = (await res.json()).error || ''; } catch (_) {}
       throw new Error(detail || ('HTTP ' + res.status));
     }
+    lastSig = null;  // 自分の変更で自分のタブをリロードさせない
     flashToast(node.dataset.label + ' を確定版にしました');
   } catch (e) {
     if (prev) applySelection(c, prev);  // 失敗したら元に戻す
@@ -952,6 +954,7 @@ async function postOrder() {
     const res = await fetch(BASE + '/reorder', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ order }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    lastSig = null;
     flashToast('並び順を保存しました');
   } catch (e) {
     alert('並び順の保存に失敗しました: ' + e.message + '\\n再読み込みして確認してください。');
@@ -1044,6 +1047,7 @@ async function deleteSlide(btn) {
     const res = await fetch(BASE + '/delete-slide', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ slide: base }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    lastSig = null;
     undoPending = memo;
     document.getElementById('undo-msg').textContent = base + ' を削除しました';
     document.getElementById('undo-toast').classList.add('show');
@@ -1079,6 +1083,7 @@ async function undoDelete() {
     const res = await fetch(BASE + '/restore-slide', { method: 'POST',
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ slide: memo.base }) });
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    lastSig = null;
     restoreDom(memo);
   } catch (e) {
     alert('復元に失敗しました: ' + e.message);
@@ -1425,19 +1430,44 @@ def pending_feedback(session_dir: str) -> list:
     return [os.path.join(hist_dir, n) for n in names if n > cursor]
 
 
-def ack_feedback(session_dir: str) -> int:
-    """現在の未処理フィードバックを処理済みにする。Returns: ack した件数。
+def failed_feedback(session_dir: str) -> list:
+    """自動処理ワーカーが失敗させた送信（dead-letter）の一覧（古い順の絶対パス）。"""
+    failed_dir = os.path.join(os.path.realpath(os.path.abspath(session_dir)),
+                              "feedback_history", "failed")
+    if not os.path.isdir(failed_dir):
+        return []
+    try:
+        names = sorted(n for n in os.listdir(failed_dir) if n.endswith(".json"))
+    except OSError:
+        return []
+    return [os.path.join(failed_dir, n) for n in names]
 
-    エージェントは未処理キューを古い順に処理し、編集・検証が完了した時点でのみ
-    これを呼ぶ（途中で呼ぶと未処理分が失われる）。
+
+def ack_feedback(session_dir: str) -> int:
+    """未処理キューと dead-letter を処理済みにする。Returns: ack した件数。
+
+    エージェントは未処理・失敗分を古い順に処理し、編集・検証が完了した時点でのみ
+    これを呼ぶ（途中で呼ぶと未処理分が失われる）。dead-letter は failed/archived/ へ移す。
     """
+    count = 0
     pend = pending_feedback(session_dir)
-    if not pend:
-        return 0
-    hist_dir = os.path.dirname(pend[-1])
-    with open(os.path.join(hist_dir, FEEDBACK_CURSOR), "w", encoding="utf-8") as f:
-        f.write(os.path.basename(pend[-1]))
-    return len(pend)
+    if pend:
+        hist_dir = os.path.dirname(pend[-1])
+        with open(os.path.join(hist_dir, FEEDBACK_CURSOR), "w", encoding="utf-8") as f:
+            f.write(os.path.basename(pend[-1]))
+        count += len(pend)
+    failed = failed_feedback(session_dir)
+    if failed:
+        import shutil
+        archived = os.path.join(os.path.dirname(failed[0]), "archived")
+        os.makedirs(archived, exist_ok=True)
+        for p in failed:
+            try:
+                shutil.move(p, os.path.join(archived, os.path.basename(p)))
+                count += 1
+            except OSError:
+                pass
+    return count
 
 
 def _pending_feedback_banner(session_dir: str) -> str:
@@ -1751,12 +1781,15 @@ class DashboardService:
                 "base": base,
                 "state": state,
                 "versions": len(entry.get("versions") or []),
+                # 確定版の切替（別タブや自動ワーカーによる）も検知できるように含める
+                "current": os.path.basename(entry.get("current_image") or ""),
             })
         items.sort(key=lambda item: item["base"])
         return {
             "total": len(items),
             "counts": counts,
             "slides": items,
+            "order": manifest.get("slide_order") or [],
             "session": read_session_status(self.session_dir),
         }
 
@@ -2521,14 +2554,22 @@ def main() -> int:
 
     if args.pending:
         pend = pending_feedback(args.session_dir)
-        if not pend:
+        failed = failed_feedback(args.session_dir)
+        if not pend and not failed:
             print("未処理のフィードバックはありません")
             return 2
-        print(f"未処理フィードバック {len(pend)}件（古い順）:")
-        for p in pend:
-            print(f"--- {os.path.basename(p)}")
-            with open(p, "r", encoding="utf-8") as f:
-                print(f.read())
+        if pend:
+            print(f"未処理フィードバック {len(pend)}件（古い順）:")
+            for p in pend:
+                print(f"--- {os.path.basename(p)}")
+                with open(p, "r", encoding="utf-8") as f:
+                    print(f.read())
+        if failed:
+            print(f"[自動処理失敗] 引き継ぎ待ち {len(failed)}件（古い順）:")
+            for p in failed:
+                print(f"--- {os.path.basename(p)}")
+                with open(p, "r", encoding="utf-8") as f:
+                    print(f.read())
         return 0
 
     if args.await_feedback:

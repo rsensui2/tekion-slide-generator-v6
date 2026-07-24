@@ -10,10 +10,11 @@
 
 指示のテキストは edit_slide にそのまま渡るため、標準的な赤入れに LLM の
 オーケストレーションは不要（画像生成自体は edit_slide 内の Codex サブスク枠）。
-構成変更などワーカーで扱えない依頼は、チャットで「続きを」と頼めばエージェントが
-`--pending` から引き継げる（このワーカーは ack 済みにしない失敗分をログに残す）。
 
-多重起動は .worker.lock（pid）で防ぐ。ハブは送信のたびに起動を試みてよい。
+失敗を含む送信は ack せず feedback_history/failed/ へ移す（dead-letter）。
+チャットで「続きを」と頼めば、エージェントが `--pending` で失敗分ごと引き継げる。
+多重起動は .worker.lock の flock で直列化する（後発は先行の完了を待ってから
+キューを再確認するため、取りこぼし窓がない）。ハブは送信のたびに起動してよい。
 """
 from __future__ import annotations
 
@@ -40,26 +41,20 @@ def _lock_path(session_dir: str) -> str:
     return os.path.join(hist, ".worker.lock")
 
 
-def acquire_lock(session_dir: str) -> bool:
-    lock = _lock_path(session_dir)
-    if os.path.exists(lock):
-        try:
-            with open(lock, "r", encoding="utf-8") as f:
-                pid = int(f.read().strip())
-            os.kill(pid, 0)  # 生存確認
-            return False  # 稼働中のワーカーがいる
-        except (ValueError, ProcessLookupError, PermissionError, OSError):
-            pass  # 死んだロック → 奪取
-    with open(lock, "w", encoding="utf-8") as f:
-        f.write(str(os.getpid()))
-    return True
+def acquire_lock(session_dir: str):
+    """flock をブロッキング取得し、ファイルハンドルを返す（プロセス生存中保持）。
 
-
-def release_lock(session_dir: str) -> None:
-    try:
-        os.unlink(_lock_path(session_dir))
-    except OSError:
-        pass
+    先行ワーカーがいる場合は終了を待ってから進む。こうすると
+    「先行がキュー空を確認して終了する瞬間に新着が届き、後発はロックを見て
+    即終了 → 誰も処理しない」という取りこぼし窓が消える（後発はロック獲得後に
+    必ずキューを再確認するため）。ハンドルを閉じればロックは自動解放される。
+    """
+    import fcntl
+    lf = open(_lock_path(session_dir), "w")
+    fcntl.flock(lf, fcntl.LOCK_EX)
+    lf.write(str(os.getpid()))
+    lf.flush()
+    return lf
 
 
 def _ack_upto(session_dir: str, history_file: str) -> None:
@@ -74,12 +69,13 @@ def _strip_marker(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _resolve_brand_env() -> tuple[str, dict]:
+def _resolve_brand_env(provider: str) -> tuple[str, dict]:
     """resolve_brand の結果を (logo, 環境変数) に展開する。"""
     from resolve_brand import resolve
     result = resolve()
     env = dict(os.environ)
-    env.pop("OPENAI_API_KEY", None)  # サブスク枠を守る（残っていると従量課金）
+    if provider == "codex":
+        env.pop("OPENAI_API_KEY", None)  # サブスク枠を守る（残っていると従量課金）
     env["SLIDE_LOGO_POSITION"] = result["logo_position"]
     env["SLIDE_LOGO_SCALE"] = str(result["logo_scale"])
     if result.get("footer_text") is not None:
@@ -108,10 +104,15 @@ def build_jobs(session_dir: str, payload: dict) -> list[dict]:
         if global_note:
             instruction = (instruction + "\n" + global_note).strip()
         att = attachments.get(base) or []
+        if len(att) > 1:
+            names = ", ".join(os.path.basename(a) for a in att[1:])
+            instruction += (f"\n（参照画像のほか、ユーザーは {names} も添付している。"
+                            "指示文でそれらに言及があれば考慮すること）")
         jobs.append({"base": base, "instruction": instruction,
-                     "rebuild": base in rebuild,
-                     "reference": att[0] if att else None,
-                     "extra_refs": att[1:]})
+                     # 全体指示が「参照なし」なら、個別指示つきスライドも作り直しにする
+                     "rebuild": (base in rebuild)
+                     or (bool(global_note) and not global_keepref),
+                     "reference": att[0] if att else None})
         covered.add(base)
 
     if global_note:
@@ -120,7 +121,7 @@ def build_jobs(session_dir: str, payload: dict) -> list[dict]:
                 continue
             jobs.append({"base": base, "instruction": global_note,
                          "rebuild": not global_keepref,
-                         "reference": None, "extra_refs": []})
+                         "reference": None})
     return jobs
 
 
@@ -136,8 +137,6 @@ def run_job(session_dir: str, job: dict, logo: str, env: dict, provider: str) ->
         return job["base"], False, "指示が空（微修正モードでは指示が必要）"
     if job["reference"] and os.path.exists(job["reference"]):
         cmd += ["--reference-image", job["reference"]]
-        for extra in job["extra_refs"]:
-            job["instruction"] += ""  # 追加分は1枚目のみ参照（複数添付は指示文で言及済み）
     if logo:
         cmd += ["--logo", logo]
     try:
@@ -149,14 +148,27 @@ def run_job(session_dir: str, job: dict, logo: str, env: dict, provider: str) ->
         return job["base"], False, "timeout (900s)"
 
 
+def _dead_letter(session_dir: str, hist_file: str) -> None:
+    """処理に失敗した送信を failed/ へ移す（キューからは外れ、引き継ぎ用に残る）。
+
+    ファイルを動かすだけでキューから消えるため、カーソルは進めない。
+    エージェントは `review_deck.py --pending` で失敗分も確認できる。
+    """
+    import shutil
+    failed_dir = os.path.join(session_dir, "feedback_history", "failed")
+    os.makedirs(failed_dir, exist_ok=True)
+    try:
+        shutil.move(hist_file, os.path.join(failed_dir, os.path.basename(hist_file)))
+    except OSError as e:
+        print(f"⚠️  dead-letter への移動に失敗: {e}")
+
+
 def process(session_dir: str, provider: str) -> int:
     session_dir = os.path.realpath(os.path.abspath(session_dir))
-    if not acquire_lock(session_dir):
-        print("ℹ️  既にワーカーが稼働中。終了します")
-        return 0
+    lock_handle = acquire_lock(session_dir)  # 先行ワーカーの終了を待って必ず再確認する
     failures = []
     try:
-        logo, env = _resolve_brand_env()
+        logo, env = _resolve_brand_env(provider)
         while True:
             pend = pending_feedback(session_dir)
             if not pend:
@@ -166,23 +178,31 @@ def process(session_dir: str, provider: str) -> int:
                     with open(hist_file, "r", encoding="utf-8") as f:
                         payload = json.load(f)
                 except (OSError, json.JSONDecodeError) as e:
-                    print(f"⚠️  読めない履歴をスキップ: {hist_file} ({e})")
-                    _ack_upto(session_dir, hist_file)
+                    print(f"⚠️  読めない履歴を dead-letter へ: {hist_file} ({e})")
+                    _dead_letter(session_dir, hist_file)
                     continue
                 jobs = build_jobs(session_dir, payload)
-                if jobs:
-                    set_session_status(session_dir, "editing",
-                                       f"修正指示を処理中（{len(jobs)}枚）")
-                    print(f"🛠  {os.path.basename(hist_file)}: {len(jobs)}枚を処理")
-                    with ThreadPoolExecutor(max_workers=EDIT_PARALLEL) as pool:
-                        for base, ok, detail in pool.map(
-                                lambda j: run_job(session_dir, j, logo, env, provider), jobs):
-                            print(("✓ " if ok else "✗ ") + base + ("" if ok else f" — {detail}"))
-                            if not ok:
-                                failures.append(base)
-                else:
+                if not jobs:
                     print(f"（{os.path.basename(hist_file)}: 処理対象なし = 校了送信）")
-                _ack_upto(session_dir, hist_file)  # 処理済み分だけ進める（新着は次周で）
+                    _ack_upto(session_dir, hist_file)
+                    continue
+                set_session_status(session_dir, "editing",
+                                   f"修正指示を処理中（{len(jobs)}枚）")
+                print(f"🛠  {os.path.basename(hist_file)}: {len(jobs)}枚を処理")
+                payload_failed = []
+                with ThreadPoolExecutor(max_workers=EDIT_PARALLEL) as pool:
+                    for base, ok, detail in pool.map(
+                            lambda j: run_job(session_dir, j, logo, env, provider), jobs):
+                        print(("✓ " if ok else "✗ ") + base + ("" if ok else f" — {detail}"))
+                        if not ok:
+                            payload_failed.append(base)
+                if payload_failed:
+                    # 全ジョブ成功した送信だけ ack。失敗を含む送信は failed/ に残し、
+                    # エージェント（「続きを」）が引き継げるようにする
+                    failures.extend(payload_failed)
+                    _dead_letter(session_dir, hist_file)
+                else:
+                    _ack_upto(session_dir, hist_file)
         if failures:
             set_session_status(session_dir, "attention",
                                f"一部の修正が失敗: {', '.join(sorted(set(failures)))}。"
@@ -191,7 +211,7 @@ def process(session_dir: str, provider: str) -> int:
         set_session_status(session_dir, "done", "修正指示の反映が完了")
         return 0
     finally:
-        release_lock(session_dir)
+        lock_handle.close()
 
 
 def main() -> int:
