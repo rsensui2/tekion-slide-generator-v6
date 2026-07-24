@@ -499,27 +499,28 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     .ph-frame, .stage-hero .pulse { animation: none; }
   }
 
-  /* 最近のセッション（ハブの中核） */
+  /* 最近のセッション（ハブの中核）: note 風カードグリッド — サムネイルが主役 */
   .recent { text-align: left; }
-  .recent .row { display: flex; align-items: center; gap: 14px;
-                 background: var(--paper); border: 1px solid var(--line); border-radius: 16px;
-                 padding: 16px 20px; margin-bottom: 10px; box-shadow: var(--shadow-sm);
-                 transition: transform .18s, border-color .18s, box-shadow .18s; }
-  .recent .row:hover { transform: translateY(-2px); border-color: rgba(255,90,0,.35);
-                       box-shadow: 0 18px 44px -30px rgba(255,90,0,.45); }
-  .recent .row .rthumb { width: 104px; aspect-ratio: 16 / 9; object-fit: cover;
-                         border-radius: 8px; border: 1px solid var(--line);
-                         flex: 0 0 auto; background: #f3ede6; }
-  .recent .row .rtitle { font-size: 14px; font-weight: 700; }
-  .recent .row .rmeta { font-size: 11.5px; color: var(--sub); margin-top: 3px;
-                        font-variant-numeric: tabular-nums; }
-  .recent .row .spacer { flex: 1; }
-  .recent .row button { border: 1.5px solid var(--orange); background: var(--paper);
-                        color: var(--orange-dark);
-                        font-size: 12px; font-weight: 700; padding: 8px 20px; border-radius: 999px;
-                        cursor: pointer; font-family: inherit;
-                        transition: background .15s, color .15s, border-color .15s; }
-  .recent .row button:hover { background: var(--grad); color: #fff; border-color: transparent; }
+  .recent .rgrid { display: grid; gap: 18px;
+                   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+  .rcard { display: flex; flex-direction: column; align-items: stretch; text-align: left;
+           padding: 0 0 16px; border: 1px solid var(--line); border-radius: 16px;
+           background: var(--paper); cursor: pointer; overflow: hidden;
+           box-shadow: var(--shadow-sm); font-family: inherit;
+           transition: transform .18s, border-color .18s, box-shadow .18s; }
+  .rcard:hover { transform: translateY(-4px); border-color: rgba(255,90,0,.35);
+                 box-shadow: 0 24px 48px -30px rgba(255,90,0,.45); }
+  .rcard:active { transform: translateY(-1px); }
+  .rcard.busy { opacity: .55; pointer-events: none; }
+  .rcard .rthumb { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
+                   border-bottom: 1px solid var(--line); background: #f3ede6; }
+  .rcard .rtitle { font-size: 14px; font-weight: 700; line-height: 1.55;
+                   padding: 12px 16px 4px;
+                   display: -webkit-box; -webkit-line-clamp: 2;
+                   -webkit-box-orient: vertical; overflow: hidden; }
+  .rcard .rmeta { font-size: 11px; color: var(--sub); padding: 0 16px;
+                  font-variant-numeric: tabular-nums;
+                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* オンボーディング（スタート画面下部） */
   .onboard { text-align: left; }
@@ -817,7 +818,7 @@ async function importFiles(files) {
   }
 }
 async function openSession(btn) {
-  btn.disabled = true; btn.textContent = '起動中…';
+  btn.disabled = true; btn.classList.add('busy');
   try {
     const res = await fetch('/open-session', { method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -825,10 +826,10 @@ async function openSession(btn) {
     const r = await res.json();
     if (!res.ok || !r.ok) throw new Error(r.error || res.status);
     window.open(r.url, '_blank');
-    btn.textContent = '開きました';
   } catch (e) {
-    btn.disabled = false; btn.textContent = '開く';
     alert('セッションの起動に失敗しました: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.classList.remove('busy');
   }
 }
 function toggleCreateHint() {
@@ -1389,28 +1390,37 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
         btn_import = _data_uri("btn_import.png")
         btn_create = _data_uri("btn_create.png")
 
-        # 最近のセッション（現在のセッション以外・実在するもの）
+        # 最近のセッション（現在のセッション以外・実在するもの）: note 風のカードグリッド
         recent_html = ""
         try:
             from session_registry import list_sessions as _ls
-            _rows = [r for r in _ls(limit=8)
-                     if os.path.realpath(r["path"]) != session_dir and r["exists"]]
+            _rows = [r for r in _ls(limit=12)
+                     if os.path.realpath(r["path"]) != session_dir and r["exists"]
+                     and r["slides"] > 0]  # 空セッションはカードにしない
             if _rows:
                 from urllib.parse import quote as _qq
                 items = []
                 for r in _rows:
-                    thumb = (f'<img class="rthumb" loading="lazy" alt="" '
-                             f'src="/session-thumb?path={_qq(r["path"], safe="")}&amp;w=320" '
-                             f'onerror="this.style.visibility=\'hidden\'">')
+                    # タイトルは「題名（プロジェクト / タイムスタンプ）」形式 → 題名を主役に
+                    title = r["title"]
+                    stem, _, rest = title.partition("（")
+                    sub = rest[:-1] if rest.endswith("）") else rest
                     items.append(
-                        f'        <div class="row">{thumb}<div><div class="rtitle">{html.escape(r["title"])}</div>'
-                        f'<div class="rmeta">{html.escape(r["updated_at"][:16].replace("T", " "))} · {r["slides"]}枚</div></div>'
-                        f'<span class="spacer"></span>'
-                        f'<button onclick="openSession(this)" data-path="{html.escape(r["path"])}">開く</button></div>')
+                        f'        <button class="rcard" onclick="openSession(this)" '
+                        f'data-path="{html.escape(r["path"])}" title="このデッキを開く">'
+                        f'<img class="rthumb" loading="lazy" alt="" '
+                        f'src="/session-thumb?path={_qq(r["path"], safe="")}&amp;w=480" '
+                        f'onerror="this.style.visibility=\'hidden\'">'
+                        f'<span class="rtitle">{html.escape(stem or title)}</span>'
+                        f'<span class="rmeta">{html.escape(r["updated_at"][:16].replace("T", " "))}'
+                        f' · {r["slides"]}枚'
+                        + (f' · {html.escape(sub)}' if sub else '')
+                        + '</span></button>')
                 recent_html = ('      <section class="recent">\n'
                                '        <div class="sec-head"><span class="eyebrow">Recent Sessions</span>'
                                '<h3>最近のデッキ</h3></div>\n'
-                               + "\n".join(items) + "\n      </section>\n")
+                               '        <div class="rgrid">\n'
+                               + "\n".join(items) + "\n        </div>\n      </section>\n")
         except Exception:
             recent_html = ""
 
