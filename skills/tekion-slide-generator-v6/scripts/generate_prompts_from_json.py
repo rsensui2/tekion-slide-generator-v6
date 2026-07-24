@@ -484,27 +484,28 @@ def main():
         for idx, slide in enumerate(slides)
     ]
 
-    # ProcessPoolExecutorで24並列実行
-    print(f"Generating {len(slides)} prompts with {args.max_workers} parallel workers...")
-
     success_count = 0
     failed_count = 0
 
-    with ProcessPoolExecutor(max_workers=args.max_workers) as executor:
-        # タスクを投入
-        futures = {executor.submit(generate_single_prompt, task_arg): task_arg[0]
-                   for task_arg in task_args}
-
-        # 完了を待機
-        for future in as_completed(futures):
-            slide_number, output_path, success = future.result()
-
-            if success:
-                success_count += 1
-                if success_count % 10 == 0:
-                    print(f"  Progress: {success_count}/{len(slides)} prompts generated")
-            else:
-                failed_count += 1
+    # Jinja レンダリングは軽いため、少枚数ではプロセス起動コストの方が高い。
+    # 32枚以下は単一プロセスで即時に書き切る
+    if len(slides) <= 32 or args.max_workers <= 1:
+        print(f"Generating {len(slides)} prompts (single process)...")
+        for task_arg in task_args:
+            _, _, success = generate_single_prompt(task_arg)
+            success_count += 1 if success else 0
+            failed_count += 0 if success else 1
+    else:
+        print(f"Generating {len(slides)} prompts with {args.max_workers} parallel workers...")
+        with ProcessPoolExecutor(max_workers=args.max_workers) as executor:
+            futures = {executor.submit(generate_single_prompt, task_arg): task_arg[0]
+                       for task_arg in task_args}
+            for future in as_completed(futures):
+                slide_number, output_path, success = future.result()
+                if success:
+                    success_count += 1
+                else:
+                    failed_count += 1
 
     # 結果サマリー
     print("\n" + "="*60)

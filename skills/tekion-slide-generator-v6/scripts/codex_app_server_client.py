@@ -297,6 +297,9 @@ def _generate_via_exec(
     print(f"🎨 Codex(exec)生成開始: {slide_name} ({aspect}/{image_size}{ref_label}) [{_billing_label(billing)}]",
           file=sys.stderr)
 
+    # 再生成時に「前回の古い画像」を今回の成功と誤認しないため、実行前の状態を記録する
+    pre_mtime = os.path.getmtime(output_path) if os.path.exists(output_path) else None
+
     try:
         proc = subprocess.run(
             cmd,
@@ -307,8 +310,11 @@ def _generate_via_exec(
             env=_codex_env(codex_home, use_api_key=use_api),
         )
 
-        # 1) 指定パスに保存されていればそれを採用
-        img = _read_valid_image(output_path) if os.path.exists(output_path) else None
+        # 1) 指定パスに「今回の実行で」保存されていればそれを採用
+        img = None
+        if os.path.exists(output_path):
+            if pre_mtime is None or os.path.getmtime(output_path) > pre_mtime:
+                img = _read_valid_image(output_path)
         saved = output_path if img else None
 
         # 2) フォールバック: 隔離 home の generated_images から回収（衝突なし）

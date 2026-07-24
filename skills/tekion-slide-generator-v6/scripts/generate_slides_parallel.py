@@ -337,6 +337,26 @@ def run_pass(tasks, args, retry_script, per_slide_timeout, gate, abort_event,
     return failed_tasks
 
 
+def wait_for_review(dashboard, timeout: int) -> None:
+    """レビュー送信（または timeout）までブロックし、受信サマリーを表示する。"""
+    dashboard.timer.cancel()
+    print(f"\n📊 レビュー待ち: {dashboard.url}")
+    print("   ダッシュボードで赤入れして「修正を依頼する」を押すと、このコマンドが終了します")
+    try:
+        dashboard.received.wait(timeout=timeout)
+    except KeyboardInterrupt:
+        pass
+    if not dashboard.received.is_set():
+        print("⏰ レビュー待ちタイムアウト")
+    try:
+        dashboard.httpd.shutdown()
+    except Exception:
+        pass
+    from review_deck import report_feedback
+    if report_feedback(dashboard) == 0:
+        print("   → slide_feedback.json を読んで差分編集に進んでください")
+
+
 def main():
     args = parse_args()
 
@@ -370,6 +390,19 @@ def main():
                                  grounding_map, ref_image_map)
     save_manifest(manifest_path, manifest)
 
+    # ダッシュボードは何より先に起動する（認証ウォームアップや生成を待たせない）
+    dashboard = None
+    if args.with_dashboard:
+        try:
+            from review_deck import start_server
+            dashboard = start_server(os.path.dirname(manifest_path),
+                                     timeout=args.dashboard_timeout,
+                                     open_browser=not args.dashboard_no_open)
+            threading.Thread(target=dashboard.httpd.serve_forever, daemon=True).start()
+            print(f"📊 ダッシュボード: {dashboard.url}（生成の実況が見えます）")
+        except Exception as e:
+            print(f"⚠️  ダッシュボード起動失敗（生成は続行）: {e}")
+
     # 並列数の決定: auto = 枚数ぶん全部（上限cap）。数値指定はそのまま尊重
     if str(args.max_parallel).lower() == 'auto':
         initial_parallel = min(len(tasks), args.parallel_cap) if tasks else 1
@@ -401,6 +434,8 @@ def main():
 
     if not tasks:
         print("\n✓ 全スライドが生成済みです（resume: 何もすることがありません）")
+        if dashboard is not None:
+            wait_for_review(dashboard, args.dashboard_timeout)
         return 0
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -430,18 +465,6 @@ def main():
         print("   ダッシュボードが生き残れません。--with-dashboard を付けて再実行すると、")
         print("   生成の実況とレビュー受付がこのコマンド1つで完結します（強く推奨）")
         print("=" * 70)
-
-    dashboard = None
-    if args.with_dashboard:
-        try:
-            from review_deck import start_server
-            dashboard = start_server(os.path.dirname(manifest_path),
-                                     timeout=args.dashboard_timeout,
-                                     open_browser=not args.dashboard_no_open)
-            threading.Thread(target=dashboard.httpd.serve_forever, daemon=True).start()
-            print(f"📊 ダッシュボード: {dashboard.url}（生成の実況が見えます）")
-        except Exception as e:
-            print(f"⚠️  ダッシュボード起動失敗（生成は続行）: {e}")
 
     gate = AdaptiveGate(initial=initial_parallel, cap=args.parallel_cap)
     abort_event = threading.Event()
@@ -503,24 +526,7 @@ def main():
                        "一部スライドが未完成（再実行で回収されます）" if failed else "全スライド生成完了")
 
     if dashboard is not None:
-        # 生成に時間を使った分レビュー時間が削れないよう、タイマーを張り直す
-        dashboard.timer.cancel()
-        print(f"\n📊 レビュー待ち: {dashboard.url}")
-        print("   ダッシュボードで赤入れして「修正を依頼する」を押すと、このコマンドが終了します")
-        try:
-            dashboard.received.wait(timeout=args.dashboard_timeout)
-        except KeyboardInterrupt:
-            pass
-        if not dashboard.received.is_set():
-            print("⏰ レビュー待ちタイムアウト")
-        try:
-            dashboard.httpd.shutdown()
-        except Exception:
-            pass
-        from review_deck import report_feedback
-        rc = report_feedback(dashboard)
-        if rc == 0:
-            print("   → slide_feedback.json を読んで差分編集に進んでください")
+        wait_for_review(dashboard, args.dashboard_timeout)
 
     if failed:
         print("\n⚠️  未完成のスライドがあります:")
