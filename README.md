@@ -16,6 +16,9 @@ Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF �
 
 ## インストール
 
+> 🎓 **受講生に配る場合**: [docs/INSTALL_PROMPT.md](docs/INSTALL_PROMPT.md) のプロンプトを
+> Claude Code / Codex に貼り付けてもらうだけで、エージェントがインストールから使い方の案内まで行う。
+
 ### 前提
 
 - Python 3.10+（依存は初回に `setup.sh` が自動導入: Pillow / python-pptx / requests / Jinja2 / pymupdf）
@@ -25,7 +28,7 @@ Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF �
 ### Claude Code
 
 ```bash
-# GitHub から（公開後）
+# GitHub から
 /plugin marketplace add rsensui2/tekion-slide-generator-v6
 /plugin install tekion-slide-generator@tekion-slide-generator
 
@@ -37,7 +40,7 @@ Claude Code でも Codex でも動かせるプラグイン。既存 PPTX / PDF �
 ### Codex
 
 ```bash
-# GitHub から（公開後）
+# GitHub から
 codex plugin marketplace add rsensui2/tekion-slide-generator-v6
 codex plugin add tekion-slide-generator@tekion-slide-generator
 
