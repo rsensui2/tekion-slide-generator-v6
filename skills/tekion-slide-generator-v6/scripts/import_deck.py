@@ -3,7 +3,7 @@
 
 画像ベースの PPTX（各スライドが1枚の画像で構成されたデッキ）や単体画像を
 セッションに取り込み、manifest に登録する。取り込んだスライドは通常の
-生成スライドと同様に、校正室でのレビュー・差分編集・export の対象になる。
+生成スライドと同様に、スライドダッシュボードでのレビュー・差分編集・export の対象になる。
 
 「既存のパワポをこのスキルで直していく」ための入り口:
     1. python3 import_deck.py --session-dir <新規/既存セッション> --file deck.pptx
@@ -247,7 +247,7 @@ def main() -> int:
 
     print(f"\n合計 {len(total_added)}枚を取り込みました → {args.session_dir}/manifest.json")
     if total_added:
-        print("次: review_deck.py --serve で校正室を開き、赤入れ → 差分編集で直せます")
+        print("次: スライドダッシュボード（ハブ or review_deck.py --serve）で赤入れ → 差分編集で直せます")
     if total_skipped:
         print(f"⚠️  {total_skipped}枚は画像が抽出できずスキップ（図形ベースのスライドは対象外）")
     return 0

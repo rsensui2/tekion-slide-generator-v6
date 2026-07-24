@@ -1,4 +1,4 @@
 interface:
   display_name: "TEKION Slide Generator"
-  short_description: "日本語スライド生成 + ブラウザ校正室（赤入れ・差分編集・取り込み改修）"
-  default_prompt: "Use $tekion-slide-generator-v6 to generate a Japanese slide deck from my source text, open the proofing room (校正室) in my browser, and let me review, annotate, and export PPTX/PDF."
+  short_description: "日本語スライド生成 + スライドダッシュボード（赤入れ・差分編集・取り込み改修）"
+  default_prompt: "Use $tekion-slide-generator-v6 to generate a Japanese slide deck from my source text, open the slide dashboard (スライドダッシュボード) in my browser, and let me review, annotate, and export PPTX/PDF."

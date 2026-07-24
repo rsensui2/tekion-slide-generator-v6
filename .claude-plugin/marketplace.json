@@ -8,7 +8,7 @@
     {
       "name": "tekion-slide-generator",
       "source": "./",
-      "description": "日本語プレゼンスライド生成 + 校正室（レビュー/赤入れ/差分編集/取り込み改修）。Codex サブスク枠の gpt-image-2 で API 従量課金なし。"
+      "description": "日本語プレゼンスライド生成 + スライドダッシュボード（レビュー/赤入れ/差分編集/取り込み改修）。Codex サブスク枠の gpt-image-2 で API 従量課金なし。"
     }
   ]
 }
