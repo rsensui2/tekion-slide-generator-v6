@@ -369,6 +369,21 @@ ${PYTHON} "${SKILL_DIR}/scripts/export_to_pdf.py" \
 
 ---
 
+## 過去セッションの検索と再開
+
+全セッションは `~/.tekion-slides/sessions.db` に自動記録される（manifest 保存のたびに登録）。
+ユーザーが「昨日のデッキ」「シンデレラのスライド」「作業中だったやつ」を求めたら:
+
+```bash
+${PYTHON} "${SKILL_DIR}/scripts/session_registry.py" --list --query "シンデレラ"   # 名前で検索
+${PYTHON} "${SKILL_DIR}/scripts/session_registry.py" --list --days 7               # 日数で絞り込み
+# 出力された path でダッシュボードを開き直す（resume・履歴・書き出し全て有効）
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "<path>" --serve
+```
+
+スタート画面にも「RECENT SESSIONS」として直近8件が表示され、「開く」でその場で再開できる。
+台帳に無い古いセッションは `--scan <ルート>` で一括取り込みできる。
+
 ## 既存デッキの改修（PPTX / PDF / 画像の取り込み）
 
 既存デッキを取り込んで、生成デッキと同じように赤入れ → 差分編集 → export で改修できる。

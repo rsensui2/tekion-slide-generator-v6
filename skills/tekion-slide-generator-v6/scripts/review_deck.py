@@ -338,6 +338,20 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     .ph-frame, .stage-hero .pulse { animation: none; }
   }
 
+  /* 最近のセッション（スタート画面） */
+  .recent { max-width: 900px; margin: 32px auto 0; text-align: left; }
+  .recent h3 { font-size: 12px; letter-spacing: .2em; color: var(--sub); margin: 0 0 10px; }
+  .recent .row { display: flex; align-items: center; gap: 12px;
+                 background: var(--paper); border: 1px solid var(--line); border-radius: 10px;
+                 padding: 12px 16px; margin-bottom: 8px; }
+  .recent .row .rtitle { font-size: 13.5px; font-weight: 600; }
+  .recent .row .rmeta { font-size: 11.5px; color: var(--sub); margin-top: 2px; }
+  .recent .row .spacer { flex: 1; }
+  .recent .row button { border: 1px solid var(--line); background: var(--paper); color: var(--blue);
+                        font-size: 12px; font-weight: 700; padding: 7px 16px; border-radius: 8px;
+                        cursor: pointer; font-family: inherit; }
+  .recent .row button:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+
   /* オンボーディング（スタート画面下部） */
   .onboard { max-width: 900px; margin: 36px auto 0; text-align: left; }
   .onboard .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
@@ -436,7 +450,7 @@ __BRAND_TOP__
   <button class="export" id="submit-btn" onclick="submitAll()">まとめて修正依頼する</button>
 </header>
 
-<div class="banner" id="done-banner">✓ 送信しました — Claude が修正を開始します。このタブは閉じて構いません。</div>
+<div class="banner" id="done-banner">✓ 送信しました — 担当のAIエージェントが修正を開始します。このタブは閉じて構いません。</div>
 
 <div class="stage-hero" id="stage-hero">
   <div class="pulse"></div>
@@ -606,6 +620,21 @@ async function importFiles(files) {
     alert('読み込みに失敗しました: ' + e.message);
   }
 }
+async function openSession(btn) {
+  btn.disabled = true; btn.textContent = '起動中…';
+  try {
+    const res = await fetch('/open-session', { method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ path: btn.dataset.path }) });
+    const r = await res.json();
+    if (!res.ok || !r.ok) throw new Error(r.error || res.status);
+    window.open(r.url, '_blank');
+    btn.textContent = '開きました';
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '開く';
+    alert('セッションの起動に失敗しました: ' + e.message);
+  }
+}
 function toggleCreateHint() {
   const el = document.getElementById('create-hint');
   if (el) el.hidden = !el.hidden;
@@ -734,7 +763,7 @@ async function submitAll() {
     a.href = URL.createObjectURL(blob);
     a.download = 'slide_feedback.json';
     a.click();
-    alert(n ? n + '枚分の修正指示をダウンロードしました。Claude に渡してください'
+    alert(n ? n + '枚分の修正指示をダウンロードしました。AIエージェントに渡してください'
             : '全スライド校了として書き出しました');
   }
 }
@@ -918,6 +947,26 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
 
         btn_import = _data_uri("btn_import.png")
         btn_create = _data_uri("btn_create.png")
+
+        # 最近のセッション（現在のセッション以外・実在するもの）
+        recent_html = ""
+        try:
+            from session_registry import list_sessions as _ls
+            _rows = [r for r in _ls(limit=8)
+                     if os.path.realpath(r["path"]) != session_dir and r["exists"]]
+            if _rows:
+                items = []
+                for r in _rows:
+                    items.append(
+                        f'        <div class="row"><div><div class="rtitle">{html.escape(r["title"])}</div>'
+                        f'<div class="rmeta">{html.escape(r["updated_at"][:16].replace("T", " "))} · {r["slides"]}枚</div></div>'
+                        f'<span class="spacer"></span>'
+                        f'<button onclick="openSession(this)" data-path="{html.escape(r["path"])}">開く</button></div>')
+                recent_html = ('      <section class="recent">\n        <h3>RECENT SESSIONS</h3>\n'
+                               + "\n".join(items) + "\n      </section>\n")
+        except Exception:
+            recent_html = ""
+
         if btn_import and btn_create:
             landing = f"""    <section class="landing">
       <h2>デッキをはじめる</h2>
@@ -929,7 +978,7 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
           <img src="{btn_create}" alt="新しく作る"></button>
       </div>
       <p class="create-hint" id="create-hint" hidden>✨ Cursor / Claude に「◯◯のスライドを作って」と指示してください。<br>生成が始まると、ここに実況が流れます。</p>
-      <section class="onboard">
+{recent_html}      <section class="onboard">
         <div class="steps">
           <div class="step"><span class="n">1</span><h3>作る / 読み込む</h3>
             <p>エージェント（Claude / Codex）に<br><b>「◯◯のスライドを作って」</b>と話しかける。<br>既存デッキはこの画面にドロップ。</p></div>
@@ -945,7 +994,7 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
       </section>
     </section>"""
         else:
-            landing = """    <section class="landing">
+            landing = f"""    <section class="landing">
       <h2>デッキをはじめる</h2>
       <p class="lead">既存デッキの改修も、ゼロからの生成も、ここが起点になります。</p>
       <div class="choices">
@@ -954,7 +1003,7 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
         <div class="choice passive"><span class="big">✨</span>新しく作る
           <small>Cursor / Claude にそのまま指示してください。<br>生成が始まると、ここに実況が流れます</small></div>
       </div>
-      <section class="onboard">
+{recent_html}      <section class="onboard">
         <div class="steps">
           <div class="step"><span class="n">1</span><h3>作る / 読み込む</h3>
             <p>エージェント（Claude / Codex）に<br><b>「◯◯のスライドを作って」</b>と話しかける。<br>既存デッキはこの画面にドロップ。</p></div>
@@ -999,7 +1048,8 @@ def build_html(session_dir: str, use_thumbs: bool = False) -> str:
     return page
 
 
-def start_server(session_dir: str, timeout: int, open_browser: bool = True):
+def start_server(session_dir: str, timeout: int, open_browser: bool = True,
+                 url_file: str | None = None):
     """ダッシュボードサーバを構築して返す（serve_forever は呼び出し側が回す）。
 
     Returns: SimpleNamespace(httpd, url, received: Event, feedback_path, timer)
@@ -1108,6 +1158,14 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True):
                 items.sort(key=lambda x: x["base"])
                 self._respond_json({"total": len(items), "counts": counts, "slides": items,
                                     "session": read_session_status(session_dir)})
+            elif self.path == "/sessions":
+                try:
+                    from session_registry import list_sessions
+                    rows = [r for r in list_sessions(limit=15)
+                            if os.path.realpath(r["path"]) != session_dir and r["exists"]]
+                except Exception:
+                    rows = []
+                self._respond_json({"sessions": rows})
             elif self.path in ("/export/pptx", "/export/pdf"):
                 kind = self.path.rsplit("/", 1)[1]
                 session_name = os.path.basename(session_dir)
@@ -1201,6 +1259,39 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True):
                 self._respond_json({"ok": True, "added": added, "skipped": skipped})
                 return
 
+            if self.path == "/open-session":
+                import subprocess as _sp
+                import tempfile as _tf
+                import time as _time
+                target = os.path.realpath(str(payload.get("path", "")))
+                if not os.path.exists(os.path.join(target, "manifest.json")):
+                    self._respond_json({"ok": False, "error": "session not found"}, 404)
+                    return
+                url_tmp = _tf.mktemp(suffix=".url")
+                _sp.Popen([sys.executable, os.path.abspath(__file__),
+                           "--session-dir", target, "--serve",
+                           "--serve-timeout", "7200", "--no-open", "--url-file", url_tmp],
+                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                          start_new_session=True)
+                child_url = None
+                for _ in range(40):
+                    _time.sleep(0.25)
+                    if os.path.exists(url_tmp):
+                        with open(url_tmp, "r", encoding="utf-8") as f:
+                            child_url = f.read().strip()
+                        if child_url:
+                            break
+                try:
+                    os.unlink(url_tmp)
+                except OSError:
+                    pass
+                if not child_url:
+                    self._respond_json({"ok": False, "error": "起動がタイムアウトしました"}, 500)
+                    return
+                print(f"📂 過去セッションを起動: {os.path.basename(target)} → {child_url}")
+                self._respond_json({"ok": True, "url": child_url})
+                return
+
             if self.path == "/feedback":
                 with open(feedback_path, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -1224,6 +1315,17 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True):
     port = httpd.server_address[1]
     url = f"http://127.0.0.1:{port}/"
     print(f"🌐 校正室を開きます: {url}")
+    if url_file:
+        try:
+            with open(url_file, "w", encoding="utf-8") as f:
+                f.write(url)
+        except OSError:
+            pass
+    try:
+        from session_registry import upsert as _registry_upsert
+        _registry_upsert(session_dir)
+    except Exception:
+        pass
     print("   修正指示が送信されるとこのプロセスは終了し、指示が保存されます")
 
     if open_browser:
@@ -1256,9 +1358,10 @@ def report_feedback(handle) -> int:
     return 0
 
 
-def serve(session_dir: str, timeout: int, open_browser: bool = True) -> int:
+def serve(session_dir: str, timeout: int, open_browser: bool = True,
+          url_file: str | None = None) -> int:
     """ダッシュボードを開き、フィードバック受信までブロックする。"""
-    handle = start_server(session_dir, timeout, open_browser)
+    handle = start_server(session_dir, timeout, open_browser, url_file=url_file)
     handle.httpd.serve_forever()
     handle.timer.cancel()
     return report_feedback(handle)
@@ -1272,6 +1375,7 @@ def main() -> int:
     ap.add_argument("--serve-timeout", type=int, default=3600, help="--serve の待ち上限秒")
     ap.add_argument("--no-open", action="store_true",
                     help="OS ブラウザを自動で開かない（エージェントの内蔵ブラウザで開く場合用）")
+    ap.add_argument("--url-file", help="起動時にダッシュボードURLをこのファイルへ書き出す")
     ap.add_argument("--output", help="静的モードの出力先（デフォルト: <session-dir>/review.html）")
     ap.add_argument("--open", action="store_true", help="静的モードで生成後にブラウザで開く")
     args = ap.parse_args()
@@ -1280,7 +1384,8 @@ def main() -> int:
         if os.environ.get("CODEX_SANDBOX") or os.environ.get("CODEX_THREAD_ID"):
             print("ℹ️  Codex 環境を検知: このサーバはバックグラウンド化するとコマンド終了時に"
                   "殺されます。前面実行のまま送信を待つか、生成なら --with-dashboard を使ってください")
-        return serve(args.session_dir, args.serve_timeout, open_browser=not args.no_open)
+        return serve(args.session_dir, args.serve_timeout, open_browser=not args.no_open,
+                     url_file=args.url_file)
 
     out_path = args.output or os.path.join(args.session_dir, "review.html")
     with open(out_path, "w", encoding="utf-8") as f:

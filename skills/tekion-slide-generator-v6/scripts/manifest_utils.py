@@ -73,6 +73,11 @@ def save_manifest(path: str, manifest: dict) -> None:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
             os.replace(tmp_path, path)
+            try:
+                from session_registry import upsert as _registry_upsert
+                _registry_upsert(dir_name, manifest)
+            except Exception:
+                pass  # 台帳はベストエフォート
             return
         except OSError as e:
             last_err = e

@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""TEKION Slide Generator v6 - グローバルセッション台帳。
+
+すべてのセッション（デッキ）を ~/.tekion-slides/sessions.db (SQLite) に自動記録する。
+manifest が保存されるたびに upsert されるため、どのフォルダに作られたセッションでも
+後から検索・再開できる。プロジェクトフォルダの構成に依存しない。
+
+使い方（エージェント向け）:
+    # 一覧・検索（タイトル/パスの部分一致、日数絞り込み）
+    python3 session_registry.py --list
+    python3 session_registry.py --list --query シンデレラ
+    python3 session_registry.py --list --days 7
+
+    # 既存フォルダの一括取り込み（初回移行用）
+    python3 session_registry.py --scan ~/Desktop --scan ~/Documents
+
+    # 見つけたセッションを開く:
+    python3 review_deck.py --session-dir <path> --serve
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+from datetime import datetime, timedelta
+from pathlib import Path
+
+DB_PATH = Path(os.environ.get("TEKION_SLIDES_HOME", "~/.tekion-slides")).expanduser() / "sessions.db"
+
+_SCHEMA = """CREATE TABLE IF NOT EXISTS sessions (
+    path TEXT PRIMARY KEY,
+    title TEXT,
+    slides INTEGER,
+    created_at TEXT,
+    updated_at TEXT
+)"""
+
+
+def _conn() -> sqlite3.Connection:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=3)
+    conn.execute(_SCHEMA)
+    return conn
+
+
+_GENERIC = re.compile(r"^(00_cover|course_title|9[89]_|\d+_?$)")
+
+
+def derive_title(session_dir: str, manifest: dict | None) -> str:
+    """デッキの題名を推定する。優先: 構成JSONの表紙タイトル → スライド名 → フォルダ名。"""
+    stem = None
+    # 1) slides_plan.json の表紙タイトル（最も正確）
+    plan_path = os.path.join(session_dir, "json", "slides_plan.json")
+    try:
+        with open(plan_path, "r", encoding="utf-8") as f:
+            plan = json.load(f)
+        slides = plan.get("slides", plan if isinstance(plan, list) else [])
+        if slides:
+            t = (slides[0].get("title") or "").strip()
+            if t:
+                stem = t[:40]
+    except (OSError, json.JSONDecodeError, AttributeError):
+        pass
+    # 2) スライド名の日本語ステム
+    if not stem and manifest:
+        stems = []
+        for base in manifest.get("slides", {}):
+            s = re.sub(r"_\d+$", "", base)          # 連番を除去
+            s = re.sub(r"^\d+_", "", s)             # 先頭番号を除去
+            if s and not _GENERIC.match(base) and not s.isascii():
+                stems.append(s)
+        if stems:
+            # 最頻の日本語ステム（例: さるかに合戦 / AI駆動開発経営Vol3_...）
+            stem = max(set(stems), key=stems.count)
+    parent = Path(session_dir).parent
+    project = parent.parent.name if parent.name == "slides_output" else parent.name
+    ts = Path(session_dir).name
+    if stem:
+        return f"{stem}（{project} / {ts}）"
+    return f"{project} / {ts}"
+
+
+def upsert(session_dir: str, manifest: dict | None = None) -> None:
+    """セッションを台帳に登録/更新する（ベストエフォート。呼び出し元を止めない）。"""
+    session_dir = os.path.realpath(os.path.abspath(session_dir))
+    if manifest is None:
+        mp = os.path.join(session_dir, "manifest.json")
+        try:
+            with open(mp, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+    slides = len(manifest.get("slides", {}))
+    title = derive_title(session_dir, manifest)
+    now = datetime.now().isoformat(timespec="seconds")
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO sessions(path, title, slides, created_at, updated_at)
+               VALUES(?, ?, ?, ?, ?)
+               ON CONFLICT(path) DO UPDATE SET
+                 title=excluded.title, slides=excluded.slides, updated_at=excluded.updated_at""",
+            (session_dir, title, slides, now, now))
+
+
+def list_sessions(query: str | None = None, days: int | None = None, limit: int = 30) -> list[dict]:
+    sql = "SELECT path, title, slides, created_at, updated_at FROM sessions"
+    cond, params = [], []
+    if query:
+        cond.append("(title LIKE ? OR path LIKE ?)")
+        params += [f"%{query}%", f"%{query}%"]
+    if days:
+        cond.append("updated_at >= ?")
+        params.append((datetime.now() - timedelta(days=days)).isoformat(timespec="seconds"))
+    if cond:
+        sql += " WHERE " + " AND ".join(cond)
+    sql += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+    with _conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    result = []
+    for path, title, slides, created, updated in rows:
+        result.append({"path": path, "title": title, "slides": slides,
+                       "created_at": created, "updated_at": updated,
+                       "exists": os.path.exists(os.path.join(path, "manifest.json"))})
+    return result
+
+
+def scan(root: str, max_depth: int = 6) -> int:
+    """root 以下の manifest.json を探して一括登録する（初回移行用）。"""
+    root_path = Path(root).expanduser()
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        depth = len(Path(dirpath).relative_to(root_path).parts)
+        if depth >= max_depth:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames
+                       if d not in ("node_modules", ".git", "__pycache__", ".thumbs", "raw")]
+        if "manifest.json" in filenames and Path(dirpath).parent.name == "slides_output":
+            try:
+                upsert(dirpath)
+                count += 1
+            except Exception:
+                pass
+    return count
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Global session registry (v6)")
+    ap.add_argument("--list", action="store_true")
+    ap.add_argument("--query")
+    ap.add_argument("--days", type=int)
+    ap.add_argument("--limit", type=int, default=30)
+    ap.add_argument("--scan", action="append", help="ルート以下の既存セッションを一括登録（複数可）")
+    ap.add_argument("--register", help="単一セッションを登録")
+    ap.add_argument("--json", action="store_true", help="JSON で出力")
+    args = ap.parse_args()
+
+    if args.register:
+        upsert(args.register)
+        print(f"registered: {args.register}")
+        return 0
+    if args.scan:
+        total = sum(scan(r) for r in args.scan)
+        print(f"✅ {total} セッションを登録しました → {DB_PATH}")
+        return 0
+
+    rows = list_sessions(args.query, args.days, args.limit)
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return 0
+    if not rows:
+        print("セッションはまだ登録されていません（--scan で既存フォルダを取り込めます）")
+        return 0
+    for r in rows:
+        mark = "" if r["exists"] else " [missing]"
+        print(f"{r['updated_at']}  {r['slides']:>3}枚  {r['title']}{mark}")
+        print(f"    {r['path']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
