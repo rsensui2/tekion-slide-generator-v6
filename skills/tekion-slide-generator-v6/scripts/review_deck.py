@@ -507,6 +507,9 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
                  transition: transform .18s, border-color .18s, box-shadow .18s; }
   .recent .row:hover { transform: translateY(-2px); border-color: rgba(255,90,0,.35);
                        box-shadow: 0 18px 44px -30px rgba(255,90,0,.45); }
+  .recent .row .rthumb { width: 104px; aspect-ratio: 16 / 9; object-fit: cover;
+                         border-radius: 8px; border: 1px solid var(--line);
+                         flex: 0 0 auto; background: #f3ede6; }
   .recent .row .rtitle { font-size: 14px; font-weight: 700; }
   .recent .row .rmeta { font-size: 11.5px; color: var(--sub); margin-top: 3px;
                         font-variant-numeric: tabular-nums; }
@@ -624,7 +627,7 @@ __BRAND_TOP__    <span class="bcol">
   <button class="export" id="submit-btn" onclick="submitAll()">まとめて修正依頼する</button>
 </header>
 
-<div id="done-banner">✓ 送信しました — 担当のAIエージェントが修正を開始します。このタブは閉じて構いません。</div>
+<div id="done-banner">✓ 送信しました — 担当のAIエージェントが修正を開始します。修正が完了すると、この画面は自動で更新されます。</div>
 
 <div class="stage-hero" id="stage-hero">
   <div class="pulse"></div>
@@ -652,9 +655,10 @@ __SITES_LOGO__<a href="https://tekion.jp" target="_blank" rel="noopener">tekion.
 </footer>
 
 <div id="dead-overlay"><div class="box">
-  <h2>このタブは古いセッションです</h2>
-  <p>ダッシュボードのサーバとの接続が切れました。<br>
-  最新のタブを使うか、エージェントに「ダッシュボードを開いて」と<br>頼んで開き直してください。このタブは閉じて構いません。</p>
+  <h2>サーバとの接続が切れています</h2>
+  <p>エージェントが修正作業中か、ダッシュボードが終了しています。<br>
+  サーバが戻り次第、<b>この画面は自動で復帰します</b>。<br>
+  長く戻らない場合は、エージェントに「ダッシュボードを開いて」と頼んでください。</p>
 </div></div>
 
 <button id="reload-banner" onclick="location.reload()">デッキが更新されました — 再読み込み</button>
@@ -727,22 +731,24 @@ function updateGenProgress(st) {
   }
 }
 async function pollStatus() {
-  if (!SERVED || submitted) return;
+  if (!SERVED) return;
   try {
     const res = await fetch('/status');
     const st = await res.json();
-    updateGenProgress(st);
+    if (!submitted) updateGenProgress(st);
     const sig = st.slides.map(s => s.base + ':' + s.state + ':' + s.versions).join('|');
     if (lastSig === null) { lastSig = sig; return; }
     if (sig !== lastSig) {
       lastSig = sig;
+      // 送信済みならエージェントの修正が届いた合図 → 即リロードして最新版を見せる。
       // 入力中・アンドゥ表示中は自動リロードしない（書きかけ・取り消し導線を守る）
-      if (!hasUserInput() && !undoPending) location.reload();
+      if (submitted || (!hasUserInput() && !undoPending)) location.reload();
       else document.getElementById('reload-banner').classList.add('show');
     }
+    if (pollFails >= 3) { location.reload(); return; }  // サーバ復活 → 同じタブで復帰
     pollFails = 0;
   } catch (e) {
-    // 連続で応答が無ければサーバ消失 = このタブは古い。明示して操作を止める
+    // サーバ消失（編集後の再起動待ち等）。ポーリングは続け、復活したら自動復帰する
     if (++pollFails >= 3 && !submitted) {
       document.getElementById('dead-overlay').classList.add('show');
     }
@@ -1390,10 +1396,14 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
             _rows = [r for r in _ls(limit=8)
                      if os.path.realpath(r["path"]) != session_dir and r["exists"]]
             if _rows:
+                from urllib.parse import quote as _qq
                 items = []
                 for r in _rows:
+                    thumb = (f'<img class="rthumb" loading="lazy" alt="" '
+                             f'src="/session-thumb?path={_qq(r["path"], safe="")}&amp;w=320" '
+                             f'onerror="this.style.visibility=\'hidden\'">')
                     items.append(
-                        f'        <div class="row"><div><div class="rtitle">{html.escape(r["title"])}</div>'
+                        f'        <div class="row">{thumb}<div><div class="rtitle">{html.escape(r["title"])}</div>'
                         f'<div class="rmeta">{html.escape(r["updated_at"][:16].replace("T", " "))} · {r["slides"]}枚</div></div>'
                         f'<span class="spacer"></span>'
                         f'<button onclick="openSession(this)" data-path="{html.escape(r["path"])}">開く</button></div>')
@@ -1479,14 +1489,16 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck") -
 
 
 def start_server(session_dir: str, timeout: int, open_browser: bool = True,
-                 url_file: str | None = None):
+                 url_file: str | None = None, exit_on_feedback: bool = True):
     """ダッシュボードサーバを構築して返す（serve_forever は呼び出し側が回す）。
 
     Returns: SimpleNamespace(httpd, url, received: Event, feedback_path, timer)
     - GET /                : 最新の manifest から HTML を毎回組み立てて返す
     - GET /export/pptx|pdf : その時点の確定版でデッキを書き出してダウンロード（継続）
     - POST /select-version : 表示中バージョンを確定版に（manifest 即反映、継続）
-    - POST /feedback       : 修正指示を保存してサーバ終了（= 完了通知でエージェントが動く）
+    - POST /feedback       : 修正指示を保存。exit_on_feedback=True ならサーバ終了
+      （= 前面実行のエージェントへの完了通知）。False（--persist）なら継続し、
+      通知は --await-feedback の待ち受けプロセスが担う（タブが死なない）
     """
     from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1559,12 +1571,73 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
             self.end_headers()
             self.wfile.write(body)
 
+        def _serve_session_thumb(self):
+            """他セッションの表紙サムネイル（スタート画面の RECENT SESSIONS 用）。
+
+            任意パスの読み出しにならないよう、台帳（sessions.db）に登録済みの
+            セッションだけを対象にする。
+            """
+            from urllib.parse import urlparse, parse_qs
+            import hashlib
+            q = parse_qs(urlparse(self.path).query)
+            target = os.path.realpath(os.path.abspath((q.get("path") or [""])[0]))
+            try:
+                width = max(64, min(1024, int((q.get("w") or ["320"])[0])))
+            except (ValueError, TypeError):
+                width = 320
+            try:
+                from session_registry import is_registered
+                if not is_registered(target):
+                    self.send_error(403)
+                    return
+            except Exception:
+                self.send_error(403)
+                return
+            manifest = load_manifest(os.path.join(target, "manifest.json"))
+            cover = None
+            for b in ordered_bases(manifest):
+                img = manifest["slides"][b].get("current_image")
+                if img and os.path.exists(img):
+                    cover = img
+                    break
+            if not cover:
+                self.send_error(404)
+                return
+            cache_dir = os.path.join(target, ".thumbs")
+            os.makedirs(cache_dir, exist_ok=True)
+            key = hashlib.sha1(
+                f"cover|{cover}|{width}|{int(os.path.getmtime(cover))}".encode()).hexdigest()
+            cached = os.path.join(cache_dir, f"{key}.jpg")
+            if not os.path.exists(cached):
+                from PIL import Image
+                with Image.open(cover) as img:
+                    img = img.convert("RGB")
+                    if img.width > width:
+                        img = img.resize((width, int(img.height * width / img.width)),
+                                         Image.LANCZOS)
+                    img.save(cached, format="JPEG", quality=80, optimize=True)
+            with open(cached, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):
             if self.path.startswith("/thumb/"):
                 try:
                     self._serve_thumb()
                 except Exception as e:
                     print(f"⚠️  thumb失敗: {e}")
+                    self.send_error(500)
+                return
+            if self.path.startswith("/session-thumb?"):
+                try:
+                    self._serve_session_thumb()
+                except Exception as e:
+                    print(f"⚠️  session-thumb失敗: {e}")
                     self.send_error(500)
                 return
             if self.path.startswith("/prompt?"):
@@ -1800,9 +1873,21 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
             if self.path == "/feedback":
                 with open(feedback_path, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False, indent=2)
+                # 常駐モードでは複数ラウンド送られるため履歴にも残す
+                try:
+                    from datetime import datetime as _dt
+                    hist_dir = os.path.join(session_dir, "feedback_history")
+                    os.makedirs(hist_dir, exist_ok=True)
+                    with open(os.path.join(hist_dir,
+                                           _dt.now().strftime("%Y%m%d_%H%M%S") + ".json"),
+                              "w", encoding="utf-8") as hf:
+                        json.dump(payload, hf, ensure_ascii=False, indent=2)
+                except OSError:
+                    pass
                 self._respond_json({"ok": True})
                 received.set()
-                threading.Thread(target=httpd.shutdown, daemon=True).start()
+                if exit_on_feedback:
+                    threading.Thread(target=httpd.shutdown, daemon=True).start()
                 return
 
             self.send_error(404)
@@ -1815,8 +1900,25 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
               "巻き戻り・書き込み瞬断が起き得ます。セッションはローカルディスクに作り、"
               "完成した PPTX/PDF だけをクラウドへ置くことを推奨します")
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    # ポートの固定再利用: 前回と同じポートで開くことで、開きっぱなしのタブが
+    # サーバ再起動後に自動復帰できる（Codex 等、サーバを常駐できない環境のため）
+    port_file = os.path.join(session_dir, ".dashboard_port")
+    want_port = 0
+    try:
+        with open(port_file, "r", encoding="utf-8") as f:
+            want_port = int(f.read().strip())
+    except (OSError, ValueError):
+        pass
+    try:
+        httpd = ThreadingHTTPServer(("127.0.0.1", want_port), Handler)
+    except OSError:  # 使用中・権限等 → 空きポートに退避
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     port = httpd.server_address[1]
+    try:
+        with open(port_file, "w", encoding="utf-8") as f:
+            f.write(str(port))
+    except OSError:
+        pass
     url = f"http://127.0.0.1:{port}/"
     print(f"🌐 スライドダッシュボードを開きます: {url}")
     if url_file:
@@ -1867,12 +1969,46 @@ def report_feedback(handle) -> int:
 
 
 def serve(session_dir: str, timeout: int, open_browser: bool = True,
-          url_file: str | None = None) -> int:
-    """ダッシュボードを開き、フィードバック受信までブロックする。"""
-    handle = start_server(session_dir, timeout, open_browser, url_file=url_file)
+          url_file: str | None = None, persist: bool = False) -> int:
+    """ダッシュボードを開く。
+
+    persist=False: フィードバック受信で終了（前面実行の完了 = 通知）
+    persist=True : 受信しても常駐し続ける（通知は --await-feedback プロセスが担う）
+    """
+    handle = start_server(session_dir, timeout, open_browser, url_file=url_file,
+                          exit_on_feedback=not persist)
     handle.httpd.serve_forever()
     handle.timer.cancel()
+    if persist:
+        return 0  # タイムアウトまで常駐するのが正常動作
     return report_feedback(handle)
+
+
+def await_feedback(session_dir: str, timeout: int) -> int:
+    """常駐ダッシュボード（--persist）への修正指示の送信を待つ軽量プロセス。
+
+    起動後に書き込まれた slide_feedback.json を検知したら、その内容を stdout に
+    出して exit 0（= バックグラウンド実行の完了通知でエージェントが動く）。
+    編集が終わったらこのプロセスだけを再起動する。サーバとタブは生き続ける。
+    """
+    import time
+    fb = os.path.join(os.path.realpath(os.path.abspath(session_dir)), "slide_feedback.json")
+    start = time.time()
+    print("⏳ 修正指示の送信を待っています（ダッシュボードは開いたまま使えます）", flush=True)
+    while time.time() - start < timeout:
+        try:
+            if os.path.exists(fb) and os.path.getmtime(fb) >= start:
+                time.sleep(0.3)  # 書き込み完了を待つ
+                with open(fb, "r", encoding="utf-8") as f:
+                    content = f.read()
+                print("✅ フィードバック受信:")
+                print(content)
+                return 0
+        except OSError:
+            pass
+        time.sleep(1)
+    print("⏰ タイムアウト（フィードバック未受信）")
+    return 2
 
 
 def main() -> int:
@@ -1880,6 +2016,11 @@ def main() -> int:
     ap.add_argument("--session-dir", required=True)
     ap.add_argument("--serve", action="store_true",
                     help="ローカルサーバで開き、修正指示の送信まで待つ")
+    ap.add_argument("--persist", action="store_true",
+                    help="--serve を常駐化: 修正指示を受信しても終了しない"
+                         "（通知は --await-feedback プロセスが担う）")
+    ap.add_argument("--await-feedback", action="store_true",
+                    help="常駐ダッシュボードへの修正指示の送信を待ち、受信で終了する軽量プロセス")
     ap.add_argument("--serve-timeout", type=int, default=3600, help="--serve の待ち上限秒")
     ap.add_argument("--no-open", action="store_true",
                     help="OS ブラウザを自動で開かない（エージェントの内蔵ブラウザで開く場合用）")
@@ -1888,12 +2029,15 @@ def main() -> int:
     ap.add_argument("--open", action="store_true", help="静的モードで生成後にブラウザで開く")
     args = ap.parse_args()
 
+    if args.await_feedback:
+        return await_feedback(args.session_dir, args.serve_timeout)
+
     if args.serve:
         if os.environ.get("CODEX_SANDBOX") or os.environ.get("CODEX_THREAD_ID"):
             print("ℹ️  Codex 環境を検知: このサーバはバックグラウンド化するとコマンド終了時に"
                   "殺されます。前面実行のまま送信を待つか、生成なら --with-dashboard を使ってください")
         return serve(args.session_dir, args.serve_timeout, open_browser=not args.no_open,
-                     url_file=args.url_file)
+                     url_file=args.url_file, persist=args.persist)
 
     out_path = args.output or os.path.join(args.session_dir, "review.html")
     with open(out_path, "w", encoding="utf-8") as f:

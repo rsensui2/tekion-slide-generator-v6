@@ -127,6 +127,14 @@ def list_sessions(query: str | None = None, days: int | None = None, limit: int 
     return result
 
 
+def is_registered(path: str) -> bool:
+    """台帳に登録済みのセッションか（他セッションのサムネイル配信の安全確認に使う）。"""
+    path = os.path.realpath(os.path.abspath(path))
+    with _conn() as conn:
+        row = conn.execute("SELECT 1 FROM sessions WHERE path=?", (path,)).fetchone()
+    return bool(row)
+
+
 def scan(root: str, max_depth: int = 6) -> int:
     """root 以下の manifest.json を探して一括登録する（初回移行用）。"""
     root_path = Path(root).expanduser()

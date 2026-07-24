@@ -98,14 +98,22 @@ Google Drive / Dropbox 等のクラウド同期フォルダ配下は、同期に
 続けて**スライドダッシュボードを起動**する。`--serve` はユーザーが「修正を依頼する」を
 押すまで戻らないブロッキングプロセス。エージェントごとの正しい起動方法:
 
-- **Claude Code**: Bash ツールの `run_in_background: true` で実行。プロセスの完了通知が
-  「修正依頼の受信」を意味するので、通知が来たら `slide_feedback.json` を読んで差分編集へ
+- **Claude Code**: 2つのバックグラウンドプロセス（いずれも `run_in_background: true`）に分ける。
+  こうするとダッシュボードのタブが死なず、修正完了のたびに**同じタブが自動更新**される:
+  1. サーバ本体（常駐。修正指示を受信しても終了しない。以後開き直さない）
+  2. 待ち受け（軽量。**この完了通知 = 修正指示の受信**。stdout に slide_feedback.json の内容が出る）
+  編集が終わったら **2 の待ち受けだけを再起動**する（サーバとタブはそのまま）
 - **Codex ほか**（サンドボックスがコマンド終了時に子プロセスを殺す環境。nohup も生き残れない）:
   Phase 1 ではサーバを起動しない。**新規生成では Phase 7 に `--with-dashboard` を付ける**
   （生成・実況・レビュー待ちが1つの前面コマンドで完結する）。取り込み改修では
   `review_deck.py --serve` を前面実行する（送信で exit 0 → `slide_feedback.json` を読む）
 
 ```bash
+# Claude Code: サーバ常駐（1）と待ち受け（2）を別々のバックグラウンドタスクで
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve --persist --serve-timeout 28800
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
+
+# Codex ほか（前面実行。送信で exit 0）
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
 ```
 
@@ -324,9 +332,13 @@ ${PYTHON} "${SKILL_DIR}/scripts/generate_slides_parallel.py" \
 ## Phase 8: レビュー → 差分編集
 
 デッキをブラウザレビューア「スライドダッシュボード」で開き、ユーザーにスライド単位でフィードバックをもらう。
-**バックグラウンドで実行する**（`run_in_background: true`）:
+Phase 1 の常駐サーバが生きていれば開き直しは不要 — **待ち受けだけを起動する**。
+サーバが無い場合（過去セッションの再開等）は `--serve --persist` で開いてから待ち受けを起動する:
 
 ```bash
+# Claude Code（いずれも run_in_background: true）
+${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --await-feedback --serve-timeout 28800
+# Codex ほか（前面実行）
 ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" --serve
 ```
 
@@ -342,7 +354,8 @@ ${PYTHON} "${SKILL_DIR}/scripts/review_deck.py" --session-dir "${SESSION_DIR}" -
   互換用マーカー「【作り直し】…」の行で始まるので、**その行を取り除いた残り**（あれば）を
   `--instruction` に使う。残りが無ければ同じプロンプトからの再生成 = 引き直し
 - `feedback` のみのスライド = 通常の差分編集
-処理が終わったら再び `--serve` で開いて再確認してもらう。両方空 = 全スライド校了。
+編集が終わったら `--await-feedback` を再起動して次の指示を待つ（開いているタブは manifest の
+変化を検知して自動更新されるので、サーバの開き直しは不要）。両方空 = 全スライド校了。
 自分でも生成画像を Read で目視し、明白な問題（文字化け・欠け）は聞かれる前に直す。
 
 修正の種類で使い分ける:
