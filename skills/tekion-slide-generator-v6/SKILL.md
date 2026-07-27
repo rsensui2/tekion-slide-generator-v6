@@ -111,11 +111,12 @@ curl -fsS "${HUB_URL}/healthz"
 ```bash
 RUNNING=$(curl -fsS "${HUB_URL}/healthz" | ${PYTHON} -c 'import json,sys;print(json.load(sys.stdin)["version"])')
 EXPECTED=$(${PYTHON} "${SKILL_DIR}/scripts/hub_version.py")
-[ "${RUNNING}" = "${EXPECTED}" ] && echo "hub OK" || echo "STALE: ${RUNNING} != ${EXPECTED}"
+[ "${RUNNING##*+}" = "${EXPECTED##*+}" ] && echo "hub OK" || echo "STALE: ${RUNNING} != ${EXPECTED}"
 ```
 
-版はプラグインの版番号と実体のハッシュを合わせたもので、中身が1バイトでも違えば
-食い違いとして出る（版を上げ忘れても検知できる）。healthz が失敗した場合、または版が違う場合:
+版は `<版番号>+<実体のハッシュ>`。**比較するのは `+` の後ろ**（版番号は導入場所で
+変わるが、ハッシュはコードが同じなら一致する）。中身が1バイトでも違えば食い違いとして
+出るので、版を上げ忘れた変更も検知できる。healthz が失敗した場合、または版が違う場合:
 
 - **Claude Code**: `bash "${SKILL_DIR}/scripts/install_hub.sh"` を1回実行する
 - **Codex**（サンドボックス内から launchd 登録はできない）: ユーザーに「ターミナルで

@@ -59,9 +59,16 @@ def digest(scripts_dir: Path) -> str:
 
 
 def fingerprint(scripts_dir: str | os.PathLike | None = None) -> str:
+    """`<版>+<実体のハッシュ>`。版は読む人のための飾りで、同一性は後半が決める。
+
+    同じコードでも導入場所によって前半は変わる（プラグイン経由なら 6.1.1、
+    スキルディレクトリ直置きなら src）。**比較するのは常に後半**。
+    """
     path = Path(scripts_dir or os.path.dirname(os.path.abspath(__file__)))
     return f"{plugin_version(path) or 'src'}+{digest(path)}"
 
 
 if __name__ == "__main__":
-    print(fingerprint(sys.argv[1] if len(sys.argv) > 1 else None))
+    args = [a for a in sys.argv[1:] if a != "--digest"]
+    value = fingerprint(args[0] if args else None)
+    print(value.split("+", 1)[1] if "--digest" in sys.argv else value)
