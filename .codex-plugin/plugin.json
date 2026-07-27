@@ -1,6 +1,6 @@
 {
   "name": "tekion-slide-generator",
-  "version": "6.0.0",
+  "version": "6.1.0",
   "description": "Generate Japanese 16:9 slide decks from Markdown/text, review and fix them in a browser proofing room, and export PPTX/PDF. Imports existing PPTX/PDF decks for revision. Images render on Codex's built-in gpt-image-2 (ChatGPT subscription, no API key).",
   "author": {
     "name": "TEKION Group"

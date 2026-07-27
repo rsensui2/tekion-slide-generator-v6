@@ -39,7 +39,9 @@ def _plugin_version() -> str:
                 return str(version)
         except (OSError, ValueError, AttributeError):
             pass
-    return "6.0.0"
+    # 版が分からない時に固定の版番号を名乗ると、更新の合図が出ないまま古い
+    # ランタイムが動き続ける。分からないことを分からないと言う
+    return "unknown"
 
 
 HUB_VERSION = _plugin_version()
