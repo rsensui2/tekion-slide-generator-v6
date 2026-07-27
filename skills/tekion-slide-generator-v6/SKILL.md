@@ -105,9 +105,17 @@ DECK_URL="${HUB_URL}/s/${SID}/"
 curl -fsS "${HUB_URL}/healthz"
 ```
 
-healthz の `version` が現在のプラグイン（`${SKILL_DIR}/../../.codex-plugin/plugin.json`）と違う場合も
-「停止中」と同じ扱いにして、インストーラを再実行すると最新ランタイムへコピー・再起動される。
-healthz が失敗した場合、または version が違う場合:
+**動いているハブが、今使おうとしているスキルと同じコードかを必ず確かめる。**
+ハブは scripts/ をコピーして常駐するため、スキルだけ新しくても実体は古いままになり得る:
+
+```bash
+RUNNING=$(curl -fsS "${HUB_URL}/healthz" | ${PYTHON} -c 'import json,sys;print(json.load(sys.stdin)["version"])')
+EXPECTED=$(${PYTHON} "${SKILL_DIR}/scripts/hub_version.py")
+[ "${RUNNING}" = "${EXPECTED}" ] && echo "hub OK" || echo "STALE: ${RUNNING} != ${EXPECTED}"
+```
+
+版はプラグインの版番号と実体のハッシュを合わせたもので、中身が1バイトでも違えば
+食い違いとして出る（版を上げ忘れても検知できる）。healthz が失敗した場合、または版が違う場合:
 
 - **Claude Code**: `bash "${SKILL_DIR}/scripts/install_hub.sh"` を1回実行する
 - **Codex**（サンドボックス内から launchd 登録はできない）: ユーザーに「ターミナルで

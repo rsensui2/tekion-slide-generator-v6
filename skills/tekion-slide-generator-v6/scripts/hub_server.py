@@ -27,21 +27,20 @@ SESSION_ROUTE = re.compile(r"^/s/([0-9a-f]{12})(/.*)?$")
 
 
 def _plugin_version() -> str:
+    """このランタイムの版（プラグイン版 + 実体のハッシュ）。
+
+    インストーラが焼き込んだ値を優先し、無ければ自分自身の scripts/ から計算する。
+    固定の版番号を名乗ってはいけない — 古いランタイムが「最新である」と
+    主張したまま動き続けることになる（実際にそうなっていた）。
+    """
     override = os.environ.get("TEKION_HUB_VERSION")
     if override:
         return override
-    for parent in Path(__file__).resolve().parents:
-        manifest = parent / ".codex-plugin" / "plugin.json"
-        try:
-            with manifest.open("r", encoding="utf-8") as handle:
-                version = json.load(handle).get("version")
-            if version:
-                return str(version)
-        except (OSError, ValueError, AttributeError):
-            pass
-    # 版が分からない時に固定の版番号を名乗ると、更新の合図が出ないまま古い
-    # ランタイムが動き続ける。分からないことを分からないと言う
-    return "unknown"
+    try:
+        from hub_version import fingerprint
+        return fingerprint()
+    except Exception:
+        return "unknown"
 
 
 HUB_VERSION = _plugin_version()

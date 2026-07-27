@@ -38,6 +38,13 @@ mkdir -p -- "$RUNTIME_DIR" "${HUB_ROOT}/assets" "$(dirname -- "$PLIST")"
 
 # hub_server.py は review_deck.py、export/import 系、UI アセットを実行時に使う。
 # プラグイン更新で元のキャッシュパスが消えても動くよう、必要なランタイム一式をコピーする。
+#
+# コピーではなく**同期**する。上書きだけだと、スキル側で消したファイルが
+# ランタイムに残り続ける（実測: 削除済みの4ファイルが residue として残っていた）。
+# 残骸はそれ自体が動くことはないが、実体のハッシュが永久に一致せず、
+# 「古いランタイムが動いている」という誤検知が出続ける
+rm -rf -- "${RUNTIME_DIR}"
+mkdir -p -- "$RUNTIME_DIR"
 for source in "$SCRIPT_DIR"/*.py; do
   cp -f -- "$source" "$RUNTIME_DIR/"
 done
@@ -60,10 +67,9 @@ for source in "${SKILL_DIR}/assets"/*; do
   [[ -f "$source" ]] && cp -f -- "$source" "${HUB_ROOT}/assets/"
 done
 
-VERSION="$(
-  python3 -c 'import json, pathlib, sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("version", "6.0.0"))' \
-    "${SKILL_DIR}/../../.codex-plugin/plugin.json" 2>/dev/null || echo "6.0.0"
-)"
+# ランタイムの版 = プラグイン版 + 実体のハッシュ。コピー元（今まさに配置した
+# scripts/）から計算するので、プラグイン経由でない導入でも食い違いを検知できる
+VERSION="$("$PYTHON_BIN" "${RUNTIME_DIR}/hub_version.py" "${RUNTIME_DIR}" 2>/dev/null || echo "unknown")"
 
 # launchd の環境は PATH が最小限で、ワーカーの子プロセスが `codex` を見つけられない。
 # インストール時点の codex / python の場所を PATH として焼き込む
