@@ -205,6 +205,19 @@ def _collect_image_in(generated_dir: Path) -> Optional[Path]:
     return max(pngs, key=lambda p: p.stat().st_mtime)
 
 
+def _is_portrait(aspect: str) -> bool:
+    """アスペクト表記が縦長かどうか。
+
+    2:3 のような縦長を指定しても指示文が「横長スライド」と言ってしまい、
+    モデルに矛盾した要件を渡していた（縦長デッキで実際に効いていた）。
+    """
+    try:
+        w_text, _, h_text = str(aspect).partition(":")
+        return float(w_text) < float(h_text)
+    except (TypeError, ValueError):
+        return False
+
+
 def _build_instruction(prompt: str, output_path: str, image_size: str, aspect: str,
                        reference_count: int = 0) -> str:
     """Codex に渡す画像生成指示文を組み立てる。
@@ -221,7 +234,8 @@ def _build_instruction(prompt: str, output_path: str, image_size: str, aspect: s
         )
     return (
         "画像を1枚だけ生成するタスクです。次の要件を厳密に守ってください。\n"
-        f"- アスペクト比: {aspect}（横長スライド）\n"
+        f"- アスペクト比: {aspect}"
+        f"（{'縦長ページ' if _is_portrait(aspect) else '横長スライド'}）\n"
         f"- 解像度: {image_size} 相当の高精細\n"
         "- 組み込みの画像生成ツール（$imagegen / gpt-image-2）を使うこと\n"
         + ref_lines +

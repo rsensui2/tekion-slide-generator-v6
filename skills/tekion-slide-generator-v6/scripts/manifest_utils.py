@@ -26,7 +26,57 @@ MANIFEST_VERSION = 2
 
 # 検証しきい値: これ未満のPNGは「白紙・破損の疑い」として failed 扱いにする
 MIN_IMAGE_BYTES = 30_000
-ASPECT_TOLERANCE = 0.05  # 16:9 からの許容ずれ（正規化後は通常ぴったり）
+ASPECT_TOLERANCE = 0.05  # 目標比からの許容ずれ（正規化後は通常ぴったり）
+
+# デッキプロファイル: 「1枚が何であるか」をセッション単位で切り替える。
+#
+# このツールが出荷するのは 16:9 のスライドで、既定値もそれ。だが台帳（manifest）に
+# deck_profile を書けば、縦横比・呼称・画像の置き場・編集スクリプト・書き出し形式を
+# デッキ単位で差し替えられる。**別ジャンルのデッキを扱う側が台帳に書くだけで済み、
+# こちらのコードにそのジャンルの知識を入れない**ための仕組み。
+#
+#   aspect         … "16:9" / "2:3" のような縦横比。表示と検証に使う
+#   item_noun      … 1枚の呼び名
+#   images_subdir  … セッション配下の画像ディレクトリ名
+#   exports        … 書き出せる形式。ここに無い形式のボタンは出さない
+#   editor / editor_dir … 赤入れを実行するスクリプト（自動ワーカーが起動する）
+#   has_script     … 1枚ごとの脚本フラグメント（script/<base>.md）を編集できるか
+#   nouns          … 画面文言の差し替え [[前, 後], ...]。長い語から順に適用される
+#   title          … セッション一覧に出す題名
+DEFAULT_PROFILE = {
+    "kind": "slides",
+    "aspect": "16:9",
+    "item_noun": "スライド",
+    "images_subdir": "images",
+    "exports": ["pptx", "pdf"],
+    "editor": "edit_slide.py",
+    "editor_dir": None,
+    "has_script": False,
+    "nouns": [],
+    "title": None,
+}
+
+
+def get_profile(manifest: dict) -> dict:
+    """manifest のデッキプロファイルを返す（未指定なら既定＝スライド）。
+
+    台帳に書かれた個別フィールドを既定値の上に重ねるだけで、kind ごとの
+    分岐は持たない。新しいジャンルは台帳に書けば足りる。
+    """
+    raw = manifest.get("deck_profile") or {}
+    return {**DEFAULT_PROFILE, **{k: v for k, v in raw.items() if v is not None}}
+
+
+def aspect_ratio(aspect: str) -> float:
+    """"16:9" / "2:3" のような表記を幅÷高さの実数にする。"""
+    try:
+        w_text, _, h_text = str(aspect).partition(":")
+        w, h = float(w_text), float(h_text)
+        if w > 0 and h > 0:
+            return w / h
+    except (TypeError, ValueError):
+        pass
+    return 16 / 9
 
 
 def now_iso() -> str:
@@ -156,11 +206,15 @@ def update_entry(manifest: dict, slide_base: str, **fields) -> dict:
     return entry
 
 
-def validate_image(path: str, min_bytes: int = MIN_IMAGE_BYTES) -> Optional[str]:
+def validate_image(path: str, min_bytes: int = MIN_IMAGE_BYTES,
+                   aspect: Optional[str] = "16:9") -> Optional[str]:
     """生成画像を機械検査する。問題なければ None、問題があれば理由文字列を返す。
 
-    チェック: 存在 / 最小サイズ / PNGとしてデコード可能 / 16:9近傍 / ほぼ単色でない。
+    チェック: 存在 / 最小サイズ / PNGとしてデコード可能 / 目標比の近傍 / ほぼ単色でない。
     「ほぼ単色」は白紙・真っ黒などの生成失敗を拾うための安全網。
+    aspect は "16:9"（既定）や "2:3"（縦長のページ）のような比率表記。
+    aspect=None にすると比率だけ検査しない（既存資産の取り込みなど、
+    「比率は違うが中身はある」ものを欠損扱いにしたくない場面で使う）。
     """
     if not path or not os.path.exists(path):
         return "file not found"
@@ -173,11 +227,12 @@ def validate_image(path: str, min_bytes: int = MIN_IMAGE_BYTES) -> Optional[str]
             img.load()
             w, h = img.size
             ratio = w / h
-            target = 16 / 9
-            if abs(ratio - target) / target > ASPECT_TOLERANCE:
-                return f"aspect ratio {ratio:.3f} deviates from 16:9"
+            target = aspect_ratio(aspect) if aspect else ratio
+            if aspect and abs(ratio - target) / target > ASPECT_TOLERANCE:
+                return f"aspect ratio {ratio:.3f} deviates from {aspect}"
             # ほぼ単色チェック（縮小してから標準偏差を見る。コストは無視できる）
-            small = img.convert("L").resize((64, 36))
+            thumb = (64, 36) if target >= 1 else (36, 64)
+            small = img.convert("L").resize(thumb)
             stddev = ImageStat.Stat(small).stddev[0]
             if stddev < 3.0:
                 return f"image is nearly uniform (stddev={stddev:.2f}) — likely blank"
@@ -257,12 +312,17 @@ def collect_current_images(manifest_path: str, allow_partial: bool = False):
     bases = ordered_bases(manifest)
     # 「validated と記録されている」だけでなく実ファイルの健全性も確認する。
     # ファイル消失・破損を黙って除外すると「N枚頼んだのに N-1 枚の deck」が
-    # 成功として出てしまう（ゼロ欠損保証の穴）
+    # 成功として出てしまう（ゼロ欠損保証の穴）。
+    #
+    # ただし縦横比はここでは見ない。比率は「生成してよいか」を決める作画時の門であって、
+    # 書き出し時の問いは「確定版と記録した絵が実在して読めるか」だけ。ここで比率を
+    # 問い直すと、比率のずれたページを含む完成作品が黙って欠けたPDFになる
+    # （実測: 102ページの作品が 88 ページで書き出された）
     incomplete = sorted(
         b for b in bases
         if slides[b].get("state") != "validated"
         or not slides[b].get("current_image")
-        or validate_image(slides[b]["current_image"]) is not None)
+        or validate_image(slides[b]["current_image"], aspect=None) is not None)
     if incomplete and not allow_partial:
         return None, incomplete
 

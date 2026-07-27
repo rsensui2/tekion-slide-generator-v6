@@ -50,8 +50,13 @@ _GENERIC = re.compile(r"^(00_cover|course_title|9[89]_|\d+_?$)")
 
 
 def derive_title(session_dir: str, manifest: dict | None) -> str:
-    """デッキの題名を推定する。優先: 構成JSONの表紙タイトル → スライド名 → フォルダ名。"""
+    """デッキの題名を推定する。優先: 作品/構成JSONの題名 → スライド名 → フォルダ名。"""
     stem = None
+    # 0) 台帳のプロファイルが題名を持っていればそれが最優先（作者が書いた正式な題名）
+    if manifest:
+        declared = ((manifest.get("deck_profile") or {}).get("title") or "").strip()
+        if declared:
+            return f"{declared[:60]}（{Path(session_dir).name}）"
     # 1) slides_plan.json の表紙タイトル（最も正確）
     plan_path = os.path.join(session_dir, "json", "slides_plan.json")
     try:
@@ -120,6 +125,7 @@ def resolve_session_id(sid: str) -> str | None:
     """
     if not re.fullmatch(r"[0-9a-f]{12}", sid or ""):
         return None
+    autodiscover()  # 別ランタイムが作ったセッションの URL も解決できるようにする
     with _conn() as conn:
         rows = conn.execute("SELECT path FROM sessions").fetchall()
     matches = []
@@ -130,7 +136,51 @@ def resolve_session_id(sid: str) -> str | None:
     return matches[0] if len(set(matches)) == 1 else None
 
 
+# 別ランタイム（コンテナ等）が作ったセッションを拾うための監視ルート。台帳 DB は
+# ランタイムごとに別物になるが、セッションのディレクトリ自体が共有ストレージ上に
+# あるなら、ここを浅くスキャンすればハブの一覧に自動で現れる。
+#
+# 既定は空（このツール単体では何も覗かない）。設定は2通り:
+#   環境変数 TEKION_WATCH_ROOTS に : 区切りのパス
+#   ~/.tekion-slides/watch_roots に1行1パス（常駐ハブは launchd 起動で環境変数を
+#   持てないため、こちらが実用的）
+_AUTODISCOVER_INTERVAL = 60.0
+_last_autodiscover = 0.0
+
+
+def watch_roots() -> list[str]:
+    roots = [p for p in os.environ.get("TEKION_WATCH_ROOTS", "").split(os.pathsep)
+             if p.strip()]
+    config = DB_PATH.parent / "watch_roots"
+    try:
+        with config.open("r", encoding="utf-8") as handle:
+            roots += [line.strip() for line in handle
+                      if line.strip() and not line.startswith("#")]
+    except OSError:
+        pass
+    return roots
+
+
+def autodiscover() -> None:
+    """監視ルートを浅くスキャンし、未登録のセッションを台帳に取り込む（ベストエフォート）。"""
+    global _last_autodiscover
+    import time
+    now = time.monotonic()
+    if now - _last_autodiscover < _AUTODISCOVER_INTERVAL:
+        return
+    _last_autodiscover = now
+    for root in watch_roots():
+        path = Path(root).expanduser()
+        if not path.is_dir():
+            continue
+        try:
+            scan(str(path), max_depth=2)
+        except Exception:
+            pass  # 一覧表示を止めない
+
+
 def list_sessions(query: str | None = None, days: int | None = None, limit: int = 30) -> list[dict]:
+    autodiscover()
     sql = "SELECT path, title, slides, created_at, updated_at FROM sessions"
     cond, params = [], []
     if query:
@@ -161,6 +211,16 @@ def is_registered(path: str) -> bool:
     return bool(row)
 
 
+def _declares_profile(manifest_path: str) -> bool:
+    """台帳が deck_profile を名乗っているか（セッションディレクトリの印）。"""
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return isinstance(data, dict) and isinstance(data.get("deck_profile"), dict)
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
 def scan(root: str, max_depth: int = 6) -> int:
     """root 以下の manifest.json を探して一括登録する（初回移行用）。"""
     root_path = Path(root).expanduser()
@@ -171,8 +231,15 @@ def scan(root: str, max_depth: int = 6) -> int:
             dirnames[:] = []
             continue
         dirnames[:] = [d for d in dirnames
-                       if d not in ("node_modules", ".git", "__pycache__", ".thumbs", "raw")]
-        if "manifest.json" in filenames and Path(dirpath).parent.name == "slides_output":
+                       if d not in ("node_modules", ".git", "__pycache__", ".thumbs", "raw",
+                                    "images", "superseded")]
+        # 「そのディレクトリが何であるか」の印を必ず1つ求める（manifest.json という
+        # 名前だけを条件にすると、無関係な JSON 置き場まで拾ってしまう）。
+        # 印は2つ: 従来の slides_output/<timestamp>/ か、台帳が自分でプロファイルを
+        # 名乗っていること。後者があるので、別ジャンルのデッキも印の追加なしに載る
+        if "manifest.json" in filenames and (
+                Path(dirpath).parent.name == "slides_output"
+                or _declares_profile(os.path.join(dirpath, "manifest.json"))):
             try:
                 upsert(dirpath)
                 count += 1

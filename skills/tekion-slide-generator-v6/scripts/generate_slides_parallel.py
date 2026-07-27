@@ -36,7 +36,6 @@ from manifest_utils import (
     validate_image,
 )
 
-PARALLEL_CAP_DEFAULT = 20  # 実測: 2K・並列20で throttle なし（20枚/68秒）
 PARALLEL_FLOOR = 2
 
 STYLE_ANCHOR_INSTRUCTION = (
@@ -60,8 +59,9 @@ def parse_args():
                         help='画像生成プロバイダ（mock はテスト用・即時ダミー生成）')
     parser.add_argument('--max-parallel', default='auto',
                         help='並列数。auto=枚数ぶん一斉ファンアウト（上限 --parallel-cap）。数値指定も可')
-    parser.add_argument('--parallel-cap', type=int, default=PARALLEL_CAP_DEFAULT,
-                        help=f'auto時の並列上限（デフォルト: {PARALLEL_CAP_DEFAULT}。実測でthrottleなしの実証値）')
+    parser.add_argument('--parallel-cap', type=int, default=None,
+                        help='並列の上限。未指定=このマシンの空きメモリから自動算出、'
+                             '0=無制限、正の数=その値に固定')
     parser.add_argument('--max-retries', type=int, default=2, help='子プロセス内のリトライ回数（デフォルト: 2）')
     parser.add_argument('--sweep-rounds', type=int, default=2,
                         help='メインパス後の検証スイープ回数（デフォルト: 2。欠損・破損スライドのみ再生成）')
@@ -307,7 +307,8 @@ def run_pass(tasks, args, retry_script, per_slide_timeout, gate, abort_event,
     print(f"\n▶ {label}: {len(tasks)}枚を並列生成（gate limit={gate.limit}）")
     failed_tasks = []
     completed = 0
-    with ThreadPoolExecutor(max_workers=gate.cap) as executor:
+    # スレッドは枚数を超えて要らない（cap が無制限のとき max_workers に巨大数を渡さない）
+    with ThreadPoolExecutor(max_workers=min(len(tasks), gate.cap)) as executor:
         futures = {
             executor.submit(worker, task, args, retry_script, per_slide_timeout,
                             gate, abort_event): task
@@ -454,8 +455,10 @@ def main():
             print(f"⚠️  ダッシュボード起動失敗（生成は続行）: {e}")
 
     # 並列数の決定: auto = 枚数ぶん全部（上限cap）。数値指定はそのまま尊重
+    from parallel_budget import ceiling
+    parallel_cap, cap_reason = ceiling(args.parallel_cap)
     if str(args.max_parallel).lower() == 'auto':
-        initial_parallel = min(len(tasks), args.parallel_cap) if tasks else 1
+        initial_parallel = min(len(tasks), parallel_cap) if tasks else 1
     else:
         initial_parallel = max(1, int(args.max_parallel))
 
@@ -471,7 +474,7 @@ def main():
     print(f"Output directory:  {args.output_dir}")
     print(f"Manifest:          {manifest_path}")
     print(f"Image size:        {args.image_size}")
-    print(f"Parallel:          {initial_parallel} (cap={args.parallel_cap}, AIMD adaptive)")
+    print(f"Parallel:          {initial_parallel} (cap={cap_reason}, AIMD adaptive)")
     print(f"Sweep rounds:      {args.sweep_rounds}")
     print(f"Per-slide timeout: {per_slide_timeout}s")
     if args.logo:
@@ -516,7 +519,7 @@ def main():
         print("   生成の実況とレビュー受付がこのコマンド1つで完結します（強く推奨）")
         print("=" * 70)
 
-    gate = AdaptiveGate(initial=initial_parallel, cap=args.parallel_cap)
+    gate = AdaptiveGate(initial=initial_parallel, cap=parallel_cap)
     abort_event = threading.Event()
     start_time = time.time()
     session_dir_for_status = os.path.dirname(manifest_path)

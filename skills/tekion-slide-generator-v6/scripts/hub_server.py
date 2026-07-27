@@ -275,6 +275,9 @@ class HubRequestHandler(BaseHTTPRequestHandler):
         elif route == "/prompt":
             result, status = service.prompt((params.get("slide") or [""])[0])
             self._respond_json(result, status)
+        elif route == "/script":
+            result, status = service.script((params.get("slide") or [""])[0])
+            self._respond_json(result, status)
         elif route == "/sessions":
             rows = [row for row in list_sessions(limit=15) if row["exists"]]
             for row in rows:
@@ -363,6 +366,18 @@ class HubRequestHandler(BaseHTTPRequestHandler):
                 service.save_feedback(payload)
                 self._spawn_feedback_worker(service.session_dir)
                 self._respond_json({"ok": True})
+            elif route == "/script":
+                slide = str(payload.get("slide", ""))
+                result, status = service.save_script(slide, payload.get("script"))
+                # 「保存して描き直す」= 通常の作り直し依頼として同じキューに積む。
+                # ワーカーがプロファイルのエディタを呼び、脚本からプロンプトを引き直す
+                if status == 200 and payload.get("regenerate"):
+                    service.save_feedback({
+                        "feedback": {slide: "脚本を書き換えたので、新しい脚本の内容で描き直す。"},
+                        "rebuild": [slide],
+                    })
+                    self._spawn_feedback_worker(service.session_dir)
+                self._respond_json(result, status)
             elif route == "/import":
                 new_session = root_import or payload.get("mode") == "new_session"
                 result = service.import_files(payload.get("files") or [], new_session)

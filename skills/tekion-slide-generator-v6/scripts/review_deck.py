@@ -31,8 +31,9 @@ import sys
 import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from manifest_utils import (load_manifest, ordered_bases, read_session_status,
-                            locked_update, save_manifest, update_entry)
+from manifest_utils import (aspect_ratio, get_profile, load_manifest, ordered_bases,
+                            read_session_status, locked_update, save_manifest,
+                            update_entry)
 
 PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="ja">
@@ -65,6 +66,8 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     --red-tint: #fdeeec;
     --shadow-sm: 0 1px 2px rgba(23,23,23,.04), 0 6px 18px rgba(23,23,23,.05);
     --shadow-lift: 0 18px 44px -26px rgba(18,24,52,.30);
+    /* 1枚の縦横比。デッキプロファイルで決まる（既定のスライドは 16/9） */
+    --deck-aspect: __ASPECT_CSS__;
     color-scheme: light;
   }
   * { box-sizing: border-box; }
@@ -252,6 +255,24 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
     display: block; width: 100%; height: auto; border-radius: 10px;
     border: 1px solid var(--line);
   }
+
+  /* 縦長デッキ: 幅いっぱいに伸ばすと1枚が画面3つ分の高さになり、
+     赤入れ欄まで届かなくなる。画面内に収めて「1ページを一目で見る」を保つ */
+  .portrait .proof img.slide { width: auto; max-width: 100%; max-height: 74vh; margin: 0 auto; }
+  .portrait .proof .ph-frame { max-width: calc(74vh * var(--deck-aspect)); margin: 0 auto; }
+
+  /* 見開きプレビュー: 隣り合う2ページを並べ、ページ最終コマの「引き」が
+     次ページ冒頭に繋がっているかを確認する QA 用の表示モード */
+  body.spread main { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 16px;
+                     align-items: start; }
+  body.spread .gslip { grid-column: 1 / -1; }
+  body.spread .proof .slip, body.spread .proof .promptbox,
+  body.spread .proof .scriptbox { display: none; }
+  body.spread .proof img.slide { max-height: 88vh; }
+  body.spread .proof .body.with-versions { grid-template-columns: minmax(0,1fr); }
+  body.spread .proof aside.vtree { display: none; }
+  #spread-btn.on { border-color: var(--orange); color: var(--orange-dark);
+                   background: var(--orange-bg); }
   .proof .maincol .tools { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
   .tool {
     display: inline-flex; align-items: center; gap: 6px;
@@ -282,6 +303,27 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
                    font-family: "SF Mono", Menlo, "Hiragino Sans", monospace;
                    font-size: 12px; line-height: 1.8; color: var(--sub);
                    white-space: pre-wrap; word-break: break-word; }
+
+  /* 脚本（ネーム）editor: 「脚本が正典・ページ画像は生成物」を画面で強制する。
+     ここを直して保存すると原稿に書き戻り、そのページだけ描き直される */
+  .scriptbox { margin-top: 12px; border: 1px solid #cfe0f5; border-radius: 12px;
+               background: #f6f9fe; overflow: hidden; }
+  .scriptbox .pbar { display: flex; align-items: center; gap: 10px;
+                     padding: 10px 16px; border-bottom: 1px solid #cfe0f5; }
+  .scriptbox .ptitle { font-family: "Space Grotesk", sans-serif;
+                       font-size: 10px; font-weight: 700; letter-spacing: .2em;
+                       text-transform: uppercase; color: #2f6fbf; }
+  .scriptbox .shint { font-size: 11.5px; color: var(--sub); margin-right: auto; }
+  .scriptbox textarea {
+    display: block; width: 100%; border: 0; background: transparent; resize: vertical;
+    min-height: 190px; padding: 14px 16px; font-family: "SF Mono", Menlo, "Hiragino Sans", monospace;
+    font-size: 12.5px; line-height: 1.9; color: var(--text); outline: none;
+  }
+  .scriptbox .sbtn { border: 1px solid #2f6fbf; background: #2f6fbf; color: #fff;
+                     font-size: 11.5px; font-weight: 700; padding: 5px 16px;
+                     border-radius: 999px; cursor: pointer; font-family: inherit; }
+  .scriptbox .sbtn[disabled] { opacity: .45; cursor: default; }
+  .scriptbox .sbtn.ghost { background: var(--paper); color: #2f6fbf; }
 
   /* バージョンタイムライン: 縦の接続線で「派生」を可視化 */
   aside.vtree { position: relative; padding-left: 18px; }
@@ -521,7 +563,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
 
   /* 生成待ちプレースホルダーカード */
-  .ph-frame { position: relative; aspect-ratio: 16 / 9; border-radius: 10px;
+  .ph-frame { position: relative; aspect-ratio: var(--deck-aspect); border-radius: 10px;
               border: 1.5px dashed #e0d5c8; overflow: hidden;
               background: linear-gradient(110deg, #f3ede6 35%, #faf7f3 50%, #f3ede6 65%);
               background-size: 220% 100%; animation: shimmer 1.8s linear infinite; }
@@ -533,7 +575,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
                       font-size: 34px; font-weight: 500; color: #d9cdbd; }
   .proof.placeholder { border-style: dashed; box-shadow: none; }
   .proof.placeholder .state { color: #b3a289; }
-  .rail .ph-thumb { aspect-ratio: 16 / 9; border-radius: 6px; border: 1.5px dashed #e0d5c8;
+  .rail .ph-thumb { aspect-ratio: var(--deck-aspect); border-radius: 6px; border: 1.5px dashed #e0d5c8;
                     background: #f3ede6; }
   @media (prefers-reduced-motion: reduce) {
     .ph-frame, .stage-hero .pulse { animation: none; }
@@ -553,7 +595,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
                  box-shadow: 0 24px 48px -30px rgba(255,90,0,.45); }
   .rcard:active { transform: translateY(-1px); }
   .rcard.busy { opacity: .55; pointer-events: none; }
-  .rcard .rthumb { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
+  .rcard .rthumb { width: 100%; aspect-ratio: var(--deck-aspect); object-fit: cover; display: block;
                    border-bottom: 1px solid var(--line); background: #f3ede6; }
   .rcard .rtitle { font-size: 14px; font-weight: 700; line-height: 1.55;
                    padding: 12px 16px 4px;
@@ -667,8 +709,7 @@ __BRAND_TOP__    <span class="bcol">
     <span class="item ink"><span class="n" id="n-ink">0</span><span class="label">要修正</span></span>
   </div>
   <label class="hdr-tool" id="import-btn">＋ 読み込み<input type="file" id="file-input" multiple accept=".pptx,.pdf,.png,.jpg,.jpeg,.webp" hidden></label>
-  <a class="hdr-tool" id="dl-pptx" href="__BASE_PATH__/export/pptx" onclick="busyExport(this)">⤓ PPTX</a>
-  <a class="hdr-tool" id="dl-pdf" href="__BASE_PATH__/export/pdf" onclick="busyExport(this)">⤓ PDF</a>
+__SPREAD_BTN____EXPORT_TOOLS__
   <button class="export" id="submit-btn" onclick="submitAll()">まとめて修正依頼する</button>
 </header>
 
@@ -1040,6 +1081,72 @@ function copyPrompt(btn) {
   }, () => alert('コピーに失敗しました'));
 }
 
+/* --- 脚本（ネーム）の編集 → 原稿へ書き戻し → そのページだけ描き直し ---
+   「脚本が正典、ページ画像は生成物」を画面の操作として成立させる部分。
+   画像だけを直すと次の再生成で消えるため、直す入口をここに集約する。 */
+async function toggleScript(btn) {
+  const c = card(btn);
+  const box = c.querySelector('.scriptbox');
+  if (!box.hidden) { box.hidden = true; return; }
+  const ta = box.querySelector('textarea');
+  box.hidden = false;
+  if (ta.dataset.loaded) return;
+  ta.value = '読み込み中…';
+  try {
+    const res = await fetch(BASE + '/script?slide=' + encodeURIComponent(c.dataset.slide));
+    const r = await res.json();
+    if (!res.ok || !r.ok) throw new Error(r.error || ('HTTP ' + res.status));
+    ta.value = r.script;
+    ta.dataset.loaded = '1';
+    ta.dataset.original = r.script;
+  } catch (e) {
+    ta.value = '脚本を取得できませんでした: ' + e.message;
+  }
+}
+async function saveScript(btn, regenerate) {
+  const c = card(btn);
+  const box = c.querySelector('.scriptbox');
+  const ta = box.querySelector('textarea');
+  if (!ta.dataset.loaded) return;
+  if (ta.value === ta.dataset.original && regenerate === false) {
+    flashToast('変更はありません'); return;
+  }
+  const buttons = box.querySelectorAll('.sbtn');
+  buttons.forEach(b => { b.disabled = true; });
+  const label = btn.textContent;
+  btn.textContent = '保存中…';
+  try {
+    const res = await fetch(BASE + '/script', { method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ slide: c.dataset.slide, script: ta.value,
+                             regenerate: !!regenerate }) });
+    const r = await res.json();
+    if (!res.ok || !r.ok) throw new Error(r.error || ('HTTP ' + res.status));
+    ta.dataset.original = ta.value;
+    flashToast(regenerate ? '脚本を保存し、このページを描き直しています'
+                          : '脚本を保存しました（描き直しは未実行）');
+  } catch (e) {
+    alert('保存に失敗しました: ' + e.message);
+  } finally {
+    buttons.forEach(b => { b.disabled = false; });
+    btn.textContent = label;
+  }
+}
+
+/* --- 見開きプレビュー: 2ページ並べて「引き」の繋がりを見る --- */
+function toggleSpread(btn) {
+  const on = document.body.classList.toggle('spread');
+  btn.classList.toggle('on', on);
+  try { localStorage.setItem('deckSpread', on ? '1' : '0'); } catch (e) { /* 保存できなくても機能する */ }
+}
+(function restoreSpread() {
+  const btn = document.getElementById('spread-btn');
+  if (!btn) return;
+  let saved = null;
+  try { saved = localStorage.getItem('deckSpread'); } catch (e) { saved = null; }
+  if (saved === '1') { document.body.classList.add('spread'); btn.classList.add('on'); }
+})();
+
 /* --- 削除（ソフトデリート + 元に戻す） --- */
 let undoPending = null;
 let undoTimer = null;
@@ -1324,14 +1431,14 @@ CARD_TEMPLATE = """    <article class="proof" id="p-__NAME__" data-slide="__NAME
           <div class="tools">
             <span class="viewing-label">確定版: <b>__CUR_LABEL__</b></span>
             <button class="tool prompt-btn" onclick="togglePrompt(this)">☰ プロンプト</button>
-            <a class="tool dl" href="__CUR_ORIG__" download="__CUR_FILE__">⤓ PNG保存</a>
+__SCRIPT_BTN__            <a class="tool dl" href="__CUR_ORIG__" download="__CUR_FILE__">⤓ PNG保存</a>
           </div>
           <div class="promptbox" hidden>
             <div class="pbar"><span class="ptitle">Generation Prompt</span>
               <button class="pcopy" onclick="copyPrompt(this)">コピー</button></div>
             <pre></pre>
           </div>
-        </div>
+__SCRIPT_BOX__        </div>
 __VTREE__
       </div>
       <div class="slip">
@@ -1376,6 +1483,20 @@ PLACEHOLDER_CARD_TEMPLATE = """    <article class="proof placeholder" id="p-__NA
     </article>"""
 
 PLACEHOLDER_RAIL_TEMPLATE = """    <a href="#p-__NAME__" data-ord="__ORD__" draggable="true" title="ドラッグで並べ替え"><span class="tag">__ORD__</span><div class="ph-thumb"></div></a>"""
+
+# 脚本フラグメントの editor — has_script なプロファイルでだけカードに差し込む
+SCRIPT_BTN_HTML = (
+    '            <button class="tool script-btn" onclick="toggleScript(this)">'
+    '✎ ネーム</button>\n')
+
+SCRIPT_BOX_HTML = """          <div class="scriptbox" hidden>
+            <div class="pbar"><span class="ptitle">Script</span>
+              <span class="shint">原稿を直すとこのページだけ描き直せます（脚本が正典）</span>
+              <button class="sbtn ghost" onclick="saveScript(this,false)">保存のみ</button>
+              <button class="sbtn" onclick="saveScript(this,true)">保存して描き直す</button></div>
+            <textarea spellcheck="false"></textarea>
+          </div>
+"""
 
 
 THUMB_MAIN_W = 1600   # メイン表示
@@ -1497,6 +1618,20 @@ def _pending_feedback_banner(session_dir: str) -> str:
     )
 
 
+def apply_nouns(text: str, pairs) -> str:
+    """画面の呼称を差し替える（プロファイルの nouns がある時だけ走る）。
+
+    画面はこのツール本来の言葉（スライド）で組み上げ、最後に一度だけ置換する。
+    UI を書き換えるたびに差し替え漏れが出るのを防ぐのと、**どんな語に置き換えるかを
+    こちら側が知らずに済ませる**ため。置換は台帳に書かれた順に適用されるので、
+    書く側が長い語を先に並べる（「スライド索引」→「スライド」の順）。
+    """
+    for pair in pairs or []:
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            text = text.replace(str(pair[0]), str(pair[1]))
+    return text
+
+
 def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
                base_path: str = "", hub_mode: bool = False) -> str:
     """デッキまたはホーム画面を組み立てる。
@@ -1511,6 +1646,8 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
     manifest_path = os.path.join(session_dir, "manifest.json")
     manifest = load_manifest(manifest_path)
     slides = manifest.get("slides", {})
+    profile = get_profile(manifest)
+    images_subdir = profile["images_subdir"]
 
     # 並び順: ダッシュボードでの並べ替え（slide_order）優先・削除済みは出さない
     ordered = [(b, slides[b]) for b in ordered_bases(manifest)]
@@ -1541,11 +1678,10 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
             versions.append(current)
         from urllib.parse import quote as _q
         # クラウド同期フォルダは同一実体に複数のパス表記を持ち得るため（Google Drive の
-        # My Drive/マイドライブ等）、パス文字列の相対化はせず「images/<basename>」で解決する
-        images_dir = os.path.join(session_dir, "images")
+        # My Drive/マイドライブ等）、パス文字列の相対化はせず「<画像dir>/<basename>」で解決する
 
         def rel_image(p):
-            cand = os.path.join("images", os.path.basename(p))
+            cand = os.path.join(images_subdir, os.path.basename(p))
             if os.path.exists(os.path.join(session_dir, cand)):
                 return cand
             return os.path.relpath(os.path.realpath(p), session_dir)
@@ -1614,6 +1750,8 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
             "__CUR_LABEL__": cur_label,
             "__BODY_CLASS__": " with-versions" if multi else "",
             "__VTREE__": vtree,
+            "__SCRIPT_BTN__": SCRIPT_BTN_HTML if profile["has_script"] else "",
+            "__SCRIPT_BOX__": SCRIPT_BOX_HTML if profile["has_script"] else "",
         }
         card, rail_item = CARD_TEMPLATE, RAIL_TEMPLATE
         for k, v in subs.items():
@@ -1748,12 +1886,30 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
     out = PAGE_TEMPLATE
     pending_banner = "" if page_kind == "home" else _pending_feedback_banner(session_dir)
     home_path = "/" if hub_mode else (base_path + "/home")
+
+    ratio = aspect_ratio(profile["aspect"])
+    portrait = ratio < 1
+    page_class = "page-home" if page_kind == "home" else "page-deck"
+    if portrait:
+        page_class += " portrait"
+    # 縦長デッキは1画面に1ページしか入らないため、見開き比較を明示的なボタンで出す
+    spread_btn = ('  <button class="hdr-tool" id="spread-btn" onclick="toggleSpread(this)"'
+                  ' title="2ページ並べて「引き」の繋がりを見る">⊞ 見開き</button>\n'
+                  if (portrait and page_kind == "deck") else "")
+    export_tools = "".join(
+        f'  <a class="hdr-tool" id="dl-{kind}" href="__BASE_PATH__/export/{kind}"'
+        f' onclick="busyExport(this)">⤓ {kind.upper()}</a>\n'
+        for kind in profile["exports"])
+
     for k, v in {
         "__BRAND_TOP__": brand_top,
         "__SITES_LOGO__": sites_logo,
         "__TITLE__": html.escape(f"スライドダッシュボード — {session_name}"),
+        "__ASPECT_CSS__": profile["aspect"].replace(":", " / "),
+        "__SPREAD_BTN__": spread_btn,
+        "__EXPORT_TOOLS__": export_tools,
         "__SESSION_NAME__": html.escape(session_name),
-        "__PAGE_CLASS__": "page-home" if page_kind == "home" else "page-deck",
+        "__PAGE_CLASS__": page_class,
         "__HOME_PATH__": home_path,
         "__BASE_PATH__": base_path,
         "__BASE_PATH_JSON__": json.dumps(base_path),
@@ -1765,7 +1921,10 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
         "__SESSION_DIR_JSON__": json.dumps(os.path.abspath(session_dir), ensure_ascii=False),
     }.items():
         out = out.replace(k, v)
-    return out
+    # export_tools は自身が __BASE_PATH__ を含むため、辞書の並び順に依存せず解決しておく
+    out = out.replace("__BASE_PATH__", base_path)
+    # 呼称の差し替えは最後に一度だけ（後入れの HTML にも一律で効かせる）
+    return apply_nouns(out, profile["nouns"])
 
 
 class DashboardService:
@@ -1836,6 +1995,56 @@ class DashboardService:
             "ok": False,
             "error": "プロンプトファイルが見つかりません（取り込みスライドには生成プロンプトがありません）",
         }, 404
+
+    def _script_path(self, base: str) -> str | None:
+        """脚本フラグメント <session>/script/<base>.md の実パス（セッション外は拒否）。
+
+        v6 側は「1枚 = 1つのテキスト断片」しか知らない。断片から通し原稿
+        を組み直すのは、その分野のツール側の仕事。
+        """
+        if not base or "/" in base or "\\" in base or base.startswith("."):
+            return None
+        path = os.path.realpath(os.path.join(self.session_dir, "script", f"{base}.md"))
+        if not path.startswith(os.path.join(self.session_dir, "script") + os.sep):
+            return None
+        return path
+
+    def script(self, base: str) -> tuple[dict, int]:
+        path = self._script_path(base)
+        if not path:
+            return {"ok": False, "error": f"unknown slide: {base}"}, 404
+        if not os.path.isfile(path):
+            return {"ok": False, "error": "この項目には脚本フラグメントがありません"}, 404
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return {"ok": True, "script": handle.read()}, 200
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}, 500
+
+    def save_script(self, base: str, text: str) -> tuple[dict, int]:
+        """脚本フラグメントを保存する。上書き前の版は script/history/ に退避する。"""
+        path = self._script_path(base)
+        if not path:
+            return {"ok": False, "error": f"unknown slide: {base}"}, 404
+        if not isinstance(text, str) or not text.strip():
+            return {"ok": False, "error": "脚本が空です"}, 400
+        with self.manifest_lock:
+            try:
+                if os.path.isfile(path):
+                    from datetime import datetime as _dt
+                    import shutil
+                    hist_dir = os.path.join(os.path.dirname(path), "history")
+                    os.makedirs(hist_dir, exist_ok=True)
+                    stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+                    shutil.copy2(path, os.path.join(hist_dir, f"{base}.{stamp}.md"))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as handle:
+                    handle.write(text if text.endswith("\n") else text + "\n")
+                os.replace(tmp, path)
+            except OSError as exc:
+                return {"ok": False, "error": str(exc)}, 500
+        return {"ok": True}, 200
 
     def select_version(self, slide: str, rel_image: str) -> tuple[dict, int]:
         image = os.path.realpath(os.path.join(self.session_dir, rel_image))
@@ -1960,7 +2169,8 @@ class DashboardService:
                 pass
 
     def export(self, kind: str) -> tuple[str | None, str | None]:
-        if kind not in ("pptx", "pdf"):
+        profile = get_profile(load_manifest(self.manifest_path))
+        if kind not in profile["exports"]:
             return None, None
         if self.restrict_paths:
             manifest = load_manifest(self.manifest_path)
@@ -1973,7 +2183,7 @@ class DashboardService:
                         return None, None
         session_name = os.path.basename(self.session_dir)
         out_path = os.path.join(self.session_dir, f"deck_export.{kind}")
-        images_dir = os.path.join(self.session_dir, "images")
+        images_dir = os.path.join(self.session_dir, profile["images_subdir"])
         with self.manifest_lock:
             try:
                 if kind == "pptx":

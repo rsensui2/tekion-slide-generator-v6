@@ -28,7 +28,8 @@ from concurrent.futures import ThreadPoolExecutor
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from manifest_utils import load_manifest, ordered_bases, set_session_status  # noqa: E402
+from manifest_utils import (get_profile, load_manifest, ordered_bases,  # noqa: E402
+                            set_session_status)
 from review_deck import FEEDBACK_CURSOR, pending_feedback  # noqa: E402
 
 REBUILD_MARK = "【作り直し】前の画像を参照せず、ゼロから再生成する。"
@@ -69,18 +70,37 @@ def _strip_marker(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _resolve_brand_env(provider: str) -> tuple[str, dict]:
-    """resolve_brand の結果を (logo, 環境変数) に展開する。"""
-    from resolve_brand import resolve
-    result = resolve()
+def _resolve_brand_env(provider: str, profile: dict) -> tuple[str, dict]:
+    """resolve_brand の結果を (logo, 環境変数) に展開する。
+
+    ブランドのロゴ・フッターはスライド固有の仕上げなので、それ以外の
+    プロファイルでは解決自体を行わない。
+    """
     env = dict(os.environ)
     if provider == "codex":
         env.pop("OPENAI_API_KEY", None)  # サブスク枠を守る（残っていると従量課金）
+    if profile["kind"] != "slides":
+        return "", env
+    from resolve_brand import resolve
+    result = resolve()
     env["SLIDE_LOGO_POSITION"] = result["logo_position"]
     env["SLIDE_LOGO_SCALE"] = str(result["logo_scale"])
     if result.get("footer_text") is not None:
         env["SLIDE_FOOTER_TEXT"] = result["footer_text"]
     return result["logo"], env
+
+
+def resolve_editor(profile: dict) -> str:
+    """プロファイルの編集スクリプトの絶対パスを返す。
+
+    editor_dir が無ければ v6 自身の scripts/ を見る（従来のスライド編集）。
+    """
+    editor = os.path.basename(profile.get("editor") or "edit_slide.py")
+    base_dir = profile.get("editor_dir") or SCRIPTS_DIR
+    path = os.path.join(os.path.expanduser(base_dir), editor)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"編集スクリプトが見つかりません: {path}")
+    return path
 
 
 def build_jobs(session_dir: str, payload: dict) -> list[dict]:
@@ -139,8 +159,9 @@ def build_jobs(session_dir: str, payload: dict) -> list[dict]:
     return jobs
 
 
-def run_job(session_dir: str, job: dict, logo: str, env: dict, provider: str) -> tuple[str, bool, str]:
-    cmd = [sys.executable, os.path.join(SCRIPTS_DIR, "edit_slide.py"),
+def run_job(session_dir: str, job: dict, logo: str, env: dict, provider: str,
+            editor: str) -> tuple[str, bool, str]:
+    cmd = [sys.executable, editor,
            "--session-dir", session_dir, "--slide", job["base"],
            "--provider", provider]
     if job["rebuild"]:
@@ -182,7 +203,9 @@ def process(session_dir: str, provider: str) -> int:
     lock_handle = acquire_lock(session_dir)  # 先行ワーカーの終了を待って必ず再確認する
     failures = []
     try:
-        logo, env = _resolve_brand_env(provider)
+        profile = get_profile(load_manifest(os.path.join(session_dir, "manifest.json")))
+        logo, env = _resolve_brand_env(provider, profile)
+        editor = resolve_editor(profile)
         while True:
             pend = pending_feedback(session_dir)
             if not pend:
@@ -206,7 +229,8 @@ def process(session_dir: str, provider: str) -> int:
                 payload_failed = []
                 with ThreadPoolExecutor(max_workers=EDIT_PARALLEL) as pool:
                     for base, ok, detail in pool.map(
-                            lambda j: run_job(session_dir, j, logo, env, provider), jobs):
+                            lambda j: run_job(session_dir, j, logo, env, provider, editor),
+                            jobs):
                         print(("✓ " if ok else "✗ ") + base + ("" if ok else f" — {detail}"))
                         if not ok:
                             payload_failed.append(base)
