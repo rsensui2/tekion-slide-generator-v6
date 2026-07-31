@@ -600,6 +600,7 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   .rcard.busy { opacity: .55; pointer-events: none; }
   .rcard .rthumb { width: 100%; aspect-ratio: var(--deck-aspect); object-fit: cover; display: block;
                    border-bottom: 1px solid var(--line); background: #f3ede6; }
+  .recent.manga .rcard .rthumb { aspect-ratio: 3 / 4; object-fit: cover; object-position: top; }
   .rcard .rtitle { font-size: 14px; font-weight: 700; line-height: 1.55;
                    padding: 12px 16px 4px;
                    display: -webkit-box; -webkit-line-clamp: 2;
@@ -1795,18 +1796,22 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
         btn_import = _data_uri("btn_import.png")
         hero_banner = _data_uri("hero_ryoko.jpg")
 
-        # 最近のセッション（現在のセッション以外・実在するもの）: note 風のカードグリッド
+        # 最近のセッション（現在のセッション以外・実在するもの）: note 風のカードグリッド。
+        # スライドと漫画は台帳の kind で分けて表示する（漫画の量産でデッキが埋もれないように）
         recent_html = ""
         try:
+            from urllib.parse import quote as _qq
             from session_registry import list_sessions as _ls
-            _rows = [r for r in _ls(limit=12)
-                     if os.path.realpath(r["path"]) != session_dir and r["exists"]
-                     and r["slides"] > 0]  # 空セッションはカードにしない
-            if _rows:
-                from urllib.parse import quote as _qq
-                from session_registry import session_id as _sid
+            from session_registry import session_id as _sid
+
+            def _visible(rows):
+                return [r for r in rows
+                        if os.path.realpath(r["path"]) != session_dir and r["exists"]
+                        and r["slides"] > 0]  # 空セッションはカードにしない
+
+            def _cards_html(rows):
                 items = []
-                for r in _rows:
+                for r in rows:
                     # タイトルは「題名（プロジェクト / タイムスタンプ）」形式 → 題名を主役に
                     title = r["title"]
                     stem, _, rest = title.partition("（")
@@ -1834,11 +1839,21 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
                             f'onerror="this.style.visibility=\'hidden\'">'
                             f'<span class="rtitle">{html.escape(stem or title)}</span>'
                             f'{meta}</button>')
-                recent_html = ('      <section class="recent">\n'
-                               '        <div class="sec-head"><span class="eyebrow">Recent Sessions</span>'
-                               '<h3>最近のデッキ</h3></div>\n'
-                               '        <div class="rgrid">\n'
-                               + "\n".join(items) + "\n        </div>\n      </section>\n")
+                return items
+
+            def _section(rows, eyebrow, heading, extra_class=""):
+                if not rows:
+                    return ""
+                return (f'      <section class="recent{extra_class}">\n'
+                        f'        <div class="sec-head"><span class="eyebrow">{eyebrow}</span>'
+                        f'<h3>{heading}</h3></div>\n'
+                        '        <div class="rgrid">\n'
+                        + "\n".join(_cards_html(rows)) + "\n        </div>\n      </section>\n")
+
+            deck_rows = _visible(_ls(limit=12, kind="slides"))
+            manga_rows = _visible(_ls(limit=8, kind="manga"))
+            recent_html = (_section(deck_rows, "Recent Decks", "最近のデッキ")
+                           + _section(manga_rows, "Manga Library", "最近の漫画", " manga"))
         except Exception:
             recent_html = ""
 

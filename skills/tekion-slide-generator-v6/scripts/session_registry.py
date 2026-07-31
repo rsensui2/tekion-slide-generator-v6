@@ -35,7 +35,8 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS sessions (
     title TEXT,
     slides INTEGER,
     created_at TEXT,
-    updated_at TEXT
+    updated_at TEXT,
+    kind TEXT
 )"""
 
 
@@ -43,7 +44,41 @@ def _conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=3)
     conn.execute(_SCHEMA)
+    try:  # 既存DBへの列追加（初回のみ成功、以後は no-op）
+        conn.execute("ALTER TABLE sessions ADD COLUMN kind TEXT")
+    except sqlite3.OperationalError:
+        pass
     return conn
+
+
+def detect_kind(session_dir: str, manifest: dict | None) -> str:
+    """セッション種別を実体から判定する。縦長ページ主体 = manga、横長主体 = slides。
+
+    manga-creator も同じセッション機構（manifest / slides_output）を使うため、
+    履歴で混ざらないよう種別を分けて記録する。漫画は表紙だけ横長のことがあるため
+    先頭1枚ではなく**最大10枚の多数決**で決める。画像が1枚も読めない場合は
+    パスに manga を含むかで推定し、それも無ければ slides に倒す。
+    """
+    portrait = landscape = 0
+    try:
+        from PIL import Image
+        for e in (manifest or {}).get("slides", {}).values():
+            img = e.get("current_image")
+            if img and os.path.exists(img):
+                with Image.open(img) as im:
+                    if im.height > im.width:
+                        portrait += 1
+                    else:
+                        landscape += 1
+            if portrait + landscape >= 10:
+                break
+    except Exception:
+        pass
+    if portrait + landscape > 0:
+        return "manga" if portrait > landscape else "slides"
+    if "manga" in os.path.realpath(session_dir).lower():
+        return "manga"
+    return "slides"
 
 
 _GENERIC = re.compile(r"^(00_cover|course_title|9[89]_|\d+_?$)")
@@ -88,7 +123,7 @@ def derive_title(session_dir: str, manifest: dict | None) -> str:
     return f"{project} / {ts}"
 
 
-def upsert(session_dir: str, manifest: dict | None = None) -> None:
+def upsert(session_dir: str, manifest: dict | None = None, touch: bool = True) -> None:
     """セッションを台帳に登録/更新する（ベストエフォート。呼び出し元を止めない）。"""
     session_dir = os.path.realpath(os.path.abspath(session_dir))
     if manifest is None:
@@ -100,14 +135,26 @@ def upsert(session_dir: str, manifest: dict | None = None) -> None:
             manifest = {}
     slides = len(manifest.get("slides", {}))
     title = derive_title(session_dir, manifest)
+    kind = detect_kind(session_dir, manifest)
     now = datetime.now().isoformat(timespec="seconds")
+    if not touch:
+        # 再判定などのメンテナンス更新では「最近」順を壊さない
+        with _conn() as conn:
+            conn.execute(
+                """INSERT INTO sessions(path, title, slides, created_at, updated_at, kind)
+                   VALUES(?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(path) DO UPDATE SET
+                     title=excluded.title, slides=excluded.slides, kind=excluded.kind""",
+                (session_dir, title, slides, now, now, kind))
+        return
     with _conn() as conn:
         conn.execute(
-            """INSERT INTO sessions(path, title, slides, created_at, updated_at)
-               VALUES(?, ?, ?, ?, ?)
+            """INSERT INTO sessions(path, title, slides, created_at, updated_at, kind)
+               VALUES(?, ?, ?, ?, ?, ?)
                ON CONFLICT(path) DO UPDATE SET
-                 title=excluded.title, slides=excluded.slides, updated_at=excluded.updated_at""",
-            (session_dir, title, slides, now, now))
+                 title=excluded.title, slides=excluded.slides,
+                 updated_at=excluded.updated_at, kind=excluded.kind""",
+            (session_dir, title, slides, now, now, kind))
 
 
 def session_id(session_dir: str) -> str:
@@ -179,9 +226,11 @@ def autodiscover() -> None:
             pass  # 一覧表示を止めない
 
 
-def list_sessions(query: str | None = None, days: int | None = None, limit: int = 30) -> list[dict]:
+def list_sessions(query: str | None = None, days: int | None = None, limit: int = 30,
+                  kind: str | None = None) -> list[dict]:
     autodiscover()
-    sql = "SELECT path, title, slides, created_at, updated_at FROM sessions"
+    sql = ("SELECT path, title, slides, created_at, updated_at, "
+           "COALESCE(kind, 'slides') FROM sessions")
     cond, params = [], []
     if query:
         cond.append("(title LIKE ? OR path LIKE ?)")
@@ -189,6 +238,9 @@ def list_sessions(query: str | None = None, days: int | None = None, limit: int 
     if days:
         cond.append("updated_at >= ?")
         params.append((datetime.now() - timedelta(days=days)).isoformat(timespec="seconds"))
+    if kind:
+        cond.append("COALESCE(kind, 'slides') = ?")
+        params.append(kind)
     if cond:
         sql += " WHERE " + " AND ".join(cond)
     sql += " ORDER BY updated_at DESC LIMIT ?"
@@ -196,9 +248,9 @@ def list_sessions(query: str | None = None, days: int | None = None, limit: int 
     with _conn() as conn:
         rows = conn.execute(sql, params).fetchall()
     result = []
-    for path, title, slides, created, updated in rows:
+    for path, title, slides, created, updated, row_kind in rows:
         result.append({"path": path, "sid": session_id(path), "title": title, "slides": slides,
-                       "created_at": created, "updated_at": updated,
+                       "created_at": created, "updated_at": updated, "kind": row_kind,
                        "exists": os.path.exists(os.path.join(path, "manifest.json"))})
     return result
 
@@ -256,8 +308,21 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument("--scan", action="append", help="ルート以下の既存セッションを一括登録（複数可）")
     ap.add_argument("--register", help="単一セッションを登録")
+    ap.add_argument("--kind", choices=["slides", "manga"], help="--list を種別で絞り込む")
+    ap.add_argument("--rescan-kinds", action="store_true",
+                    help="全セッションの種別（slides/manga）を実体の縦横比から再判定して保存")
     ap.add_argument("--json", action="store_true", help="JSON で出力")
     args = ap.parse_args()
+
+    if args.rescan_kinds:
+        rows = list_sessions(limit=10000)
+        n = 0
+        for r in rows:
+            if r["exists"]:
+                upsert(r["path"], touch=False)  # 「最近」順を保ったまま種別だけ更新
+                n += 1
+        print(f"✅ {n} 件の種別を再判定しました")
+        return 0
 
     if args.register:
         # 登録直後からハブ（/s/<sid>/）が配信できるよう、空の manifest を先に作る。
@@ -281,7 +346,7 @@ def main() -> int:
         print(f"✅ {total} セッションを登録しました → {DB_PATH}")
         return 0
 
-    rows = list_sessions(args.query, args.days, args.limit)
+    rows = list_sessions(args.query, args.days, args.limit, kind=args.kind)
     if args.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
         return 0
