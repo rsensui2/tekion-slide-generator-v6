@@ -1,6 +1,6 @@
 {
   "name": "tekion-slide-generator",
-  "version": "6.1.2",
+  "version": "6.1.3",
   "description": "TEKION Slide Generator v6 — Markdown/テキストから日本語プレゼンスライド（16:9）を生成し、ブラウザの「スライドダッシュボード」でレビュー・赤入れ・差分編集して PPTX/PDF へ書き出す。既存 PPTX/PDF の取り込み改修にも対応。画像生成は Codex 内蔵 gpt-image-2（ChatGPT/Codex サブスク枠）。",
   "author": {
     "name": "TEKION Group",

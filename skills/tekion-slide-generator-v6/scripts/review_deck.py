@@ -444,6 +444,9 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
   #dead-overlay h2 { margin: 0 0 10px; font-size: 18px; font-weight: 800; }
   #dead-overlay p { margin: 0; color: var(--sub); font-size: 13.5px; line-height: 1.9; }
 
+  .preparing { text-align: center; color: var(--sub); font-size: 14px; line-height: 2;
+               background: var(--paper); border: 1.5px dashed var(--line);
+               border-radius: 18px; padding: 48px 32px; margin-top: 8px; }
   footer.hint { text-align: center; color: var(--muted); font-size: 12.5px;
                 padding: 0 24px 48px; letter-spacing: .03em; }
 
@@ -1760,8 +1763,21 @@ def build_html(session_dir: str, use_thumbs: bool = False, page: str = "deck",
         cards.append(card)
         rail.append(rail_item)
 
-    # ハブ画面: /home で明示的に開くか、スライドが1枚もないときに表示される
-    page_kind = "home" if (page == "home" or not cards) else "deck"
+    # ハブ画面: /home で明示的に開くか、スライドが1枚もないときに表示される。
+    # ただしデッキURLを明示的に開いていて、セッションが計画・生成の進行中なら
+    # ハブに落とさず「準備中のデッキ画面」を出す（他デッキの一覧が出ると、
+    # 自分のスライドが消えた/別物が表示されたように見えるため）
+    if page == "home":
+        page_kind = "home"
+    elif cards:
+        page_kind = "deck"
+    else:
+        _st = read_session_status(session_dir) or {}
+        page_kind = ("deck" if _st.get("stage") in
+                     ("planning", "prompting", "prompted", "generating") else "home")
+    if page_kind == "deck" and not cards:
+        cards.append('    <div class="preparing">デッキを準備しています — '
+                     '構成の執筆が終わると、生成されたスライドから順にここに並びます。</div>')
     landing = ""
     if page_kind == "home":
         import base64 as _b64
