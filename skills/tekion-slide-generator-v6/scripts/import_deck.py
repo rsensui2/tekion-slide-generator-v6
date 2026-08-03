@@ -161,8 +161,15 @@ def _find_soffice() -> str | None:
     found = _shutil.which("soffice")
     if found:
         return found
-    mac_path = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
-    return mac_path if os.path.exists(mac_path) else None
+    candidates = ["/Applications/LibreOffice.app/Contents/MacOS/soffice"]
+    for env_key in ("ProgramFiles", "ProgramFiles(x86)"):
+        base = os.environ.get(env_key)
+        if base:
+            candidates.append(os.path.join(base, "LibreOffice", "program", "soffice.exe"))
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def _pptx_to_pdf(pptx_path: str, out_dir: str) -> str | None:
@@ -174,7 +181,7 @@ def _pptx_to_pdf(pptx_path: str, out_dir: str) -> str | None:
     os.makedirs(out_dir, exist_ok=True)
     result = subprocess.run(
         [soffice, "--headless", "--convert-to", "pdf", "--outdir", out_dir, pptx_path],
-        capture_output=True, text=True, timeout=180)
+        capture_output=True, encoding="utf-8", errors="replace", timeout=180)
     pdf_path = os.path.join(out_dir, os.path.splitext(os.path.basename(pptx_path))[0] + ".pdf")
     return pdf_path if result.returncode == 0 and os.path.exists(pdf_path) else None
 

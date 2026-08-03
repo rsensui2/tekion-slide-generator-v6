@@ -114,25 +114,77 @@ def load_manifest(path: str) -> dict:
     return {"version": MANIFEST_VERSION, "created_at": now_iso(), "slides": {}}
 
 
+def open_lock_file(path: str):
+    """ロックファイルを truncate せずに開いて返す。
+
+    "w" で開くとロック取得**前**に truncate が走り、Windows では先行プロセスが
+    ロック中のバイト範囲を別ハンドルから切り詰めることになって PermissionError
+    になる（byte-range lock は強制ロック）。中身を書きたい場合はロック取得後に
+    seek(0) → truncate() → write() の順で行うこと。
+    """
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o666)
+    return os.fdopen(fd, "r+", encoding="utf-8", errors="replace")
+
+
+def lock_exclusive(f) -> None:
+    """ロックファイルのプロセス間排他（POSIX: fcntl.flock / Windows: msvcrt.locking）。
+
+    ブロッキング取得。Windows の LK_LOCK は約10秒でタイムアウトするため、
+    競合エラーの間はリトライして flock と同じ「待つ」意味論に揃える。
+    競合以外の OSError（EBADF 等）は永久ハングを避けるためそのまま送出する。
+    """
+    try:
+        import fcntl
+        fcntl.flock(f, fcntl.LOCK_EX)
+    except ImportError:
+        import errno
+        import msvcrt
+        import time
+        contention = (errno.EACCES, getattr(errno, "EDEADLK", -1),
+                      getattr(errno, "EDEADLOCK", -1))
+        f.seek(0)
+        while True:
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                return
+            except OSError as e:
+                if e.errno not in contention:
+                    raise
+                time.sleep(0.05)
+
+
+def unlock_file(f) -> None:
+    """lock_exclusive で取得したロックを解放する。"""
+    try:
+        import fcntl
+        fcntl.flock(f, fcntl.LOCK_UN)
+    except ImportError:
+        import msvcrt
+        f.seek(0)
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+
+
 def locked_update(path: str, mutate) -> dict:
-    """manifest の read-modify-write を fcntl.flock でプロセス間排他して行う。
+    """manifest の read-modify-write をプロセス間排他して行う。
 
     並列の edit_slide / ハブ操作が「読む→長時間処理→書く」で互いの更新を
     上書きしないよう、**保存の直前に最新を読み直して自分の変更だけを適用**する。
     mutate(manifest) は渡された dict をその場で書き換える関数。Returns: 保存した manifest。
     """
-    import fcntl
     lock_path = path + ".lock"
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(lock_path, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
+    with open_lock_file(lock_path) as lf:
+        lock_exclusive(lf)
         try:
             manifest = load_manifest(path)
             mutate(manifest)
             save_manifest(path, manifest)
             return manifest
         finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+            unlock_file(lf)
 
 
 def save_manifest(path: str, manifest: dict) -> None:

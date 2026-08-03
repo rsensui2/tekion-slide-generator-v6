@@ -2322,6 +2322,18 @@ class DashboardService:
             return handle.read()
 
 
+def open_in_os_browser(target: str) -> None:
+    """URL またはファイルを OS 既定ブラウザで開く（macOS / Linux / Windows）。"""
+    if sys.platform == "darwin":
+        subprocess.run(["open", target], check=False)
+        return
+    try:
+        import webbrowser
+        webbrowser.open(target)
+    except Exception:
+        pass
+
+
 def start_server(session_dir: str, timeout: int, open_browser: bool = True,
                  url_file: str | None = None, exit_on_feedback: bool = True):
     """ダッシュボードサーバを構築して返す（serve_forever は呼び出し側が回す）。
@@ -2681,8 +2693,7 @@ def start_server(session_dir: str, timeout: int, open_browser: bool = True,
     print("   修正指示が送信されるとこのプロセスは終了し、指示が保存されます")
 
     if open_browser:
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        subprocess.run([opener, url], check=False)
+        open_in_os_browser(url)
     else:
         print("   （--no-open 指定のため OS ブラウザは開いていません。上記 URL をエージェントの内蔵ブラウザで開いてください）")
 
@@ -2844,8 +2855,7 @@ def main() -> int:
         f.write(build_html(args.session_dir))
     print(f"✅ レビューページ生成: {out_path}")
     if args.open:
-        opener = "open" if sys.platform == "darwin" else "xdg-open"
-        subprocess.run([opener, out_path], check=False)
+        open_in_os_browser(out_path)
     return 0
 
 

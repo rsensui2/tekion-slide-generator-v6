@@ -64,11 +64,13 @@ class FeedbackWorkerE2ETest(unittest.TestCase):
         env = dict(os.environ)
         # ワーカー子プロセスの save_manifest が実台帳（~/.tekion-slides）を汚さないように
         env["TEKION_SLIDES_HOME"] = str(Path(self.temp.name) / "slides-home")
+        env["PYTHONIOENCODING"] = "utf-8"
         env.update(env_extra or {})
         return subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "feedback_worker.py"),
              "--session-dir", str(self.sess), "--provider", "mock"],
-            capture_output=True, text=True, timeout=180, env=env)
+            capture_output=True, encoding="utf-8", errors="replace",
+            timeout=180, env=env)
 
     def test_queue_processing_and_ack(self):
         import base64

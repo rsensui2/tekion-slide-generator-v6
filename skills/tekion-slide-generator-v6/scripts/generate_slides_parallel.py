@@ -201,7 +201,9 @@ def run_child(task: dict, args, retry_script: str, per_slide_timeout: int) -> tu
         cmd.extend(['--raw-dir', task['raw_dir']])
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=per_slide_timeout)
+        result = subprocess.run(cmd, capture_output=True, encoding="utf-8",
+                                errors="replace", timeout=per_slide_timeout,
+                                env={**os.environ, "PYTHONIOENCODING": "utf-8"})
         if result.returncode == 0:
             return (True, None)
         return (False, result.stderr or result.stdout or 'unknown error')

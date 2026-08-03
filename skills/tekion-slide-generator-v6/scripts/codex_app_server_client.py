@@ -164,7 +164,7 @@ def warmup_auth(timeout: int = 90) -> bool:
     try:
         proc = subprocess.run(
             [CODEX_BIN, "exec", "--skip-git-repo-check", "-c", "model_reasoning_effort=low", "ok"],
-            capture_output=True, text=True, timeout=timeout,
+            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
             env=_codex_env(home),   # CODEX_HOME を隔離ホームに上書き＝実 auth.json を触らない
         )
         blob = (proc.stderr or "") + (proc.stdout or "")
@@ -319,7 +319,8 @@ def _generate_via_exec(
             cmd,
             input=stdin_input,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=_codex_env(codex_home, use_api_key=use_api),
         )
@@ -381,7 +382,8 @@ def _generate_via_app_server(
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
         env=_codex_env(codex_home, use_api_key=(billing == "api")),
     )

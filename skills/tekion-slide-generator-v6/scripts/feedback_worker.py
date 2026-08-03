@@ -28,8 +28,8 @@ from concurrent.futures import ThreadPoolExecutor
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from manifest_utils import (get_profile, load_manifest, ordered_bases,  # noqa: E402
-                            set_session_status)
+from manifest_utils import (get_profile, load_manifest, lock_exclusive,  # noqa: E402
+                            open_lock_file, ordered_bases, set_session_status)
 from review_deck import FEEDBACK_CURSOR, pending_feedback  # noqa: E402
 
 REBUILD_MARK = "【作り直し】前の画像を参照せず、ゼロから再生成する。"
@@ -43,16 +43,17 @@ def _lock_path(session_dir: str) -> str:
 
 
 def acquire_lock(session_dir: str):
-    """flock をブロッキング取得し、ファイルハンドルを返す（プロセス生存中保持）。
+    """排他ロックをブロッキング取得し、ファイルハンドルを返す（プロセス生存中保持）。
 
     先行ワーカーがいる場合は終了を待ってから進む。こうすると
     「先行がキュー空を確認して終了する瞬間に新着が届き、後発はロックを見て
     即終了 → 誰も処理しない」という取りこぼし窓が消える（後発はロック獲得後に
     必ずキューを再確認するため）。ハンドルを閉じればロックは自動解放される。
     """
-    import fcntl
-    lf = open(_lock_path(session_dir), "w")
-    fcntl.flock(lf, fcntl.LOCK_EX)
+    lf = open_lock_file(_lock_path(session_dir))
+    lock_exclusive(lf)
+    lf.seek(0)
+    lf.truncate()
     lf.write(str(os.getpid()))
     lf.flush()
     return lf
@@ -175,9 +176,13 @@ def run_job(session_dir: str, job: dict, logo: str, env: dict, provider: str,
     if logo:
         cmd += ["--logo", logo]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
+        # 子(Python)の標準出力をUTF-8に固定する。Windows日本語環境の既定は
+        # cp932 で、こちらのUTF-8デコードと食い違って診断文が化けるため
+        r = subprocess.run(cmd, capture_output=True, encoding="utf-8",
+                           errors="replace", timeout=900,
+                           env={**env, "PYTHONIOENCODING": "utf-8"})
         ok = r.returncode == 0
-        detail = (r.stdout + r.stderr)[-400:] if not ok else ""
+        detail = ((r.stdout or "") + (r.stderr or ""))[-400:] if not ok else ""
         return job["base"], ok, detail
     except subprocess.TimeoutExpired:
         return job["base"], False, "timeout (900s)"
