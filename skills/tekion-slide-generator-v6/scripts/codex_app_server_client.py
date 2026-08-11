@@ -11,7 +11,7 @@
 
 2 つのバックエンドを持つ:
 
-- ``exec``        : ``codex exec --full-auto`` を 1 回叩く一発実行。依存なし・確実。
+- ``exec``        : ``codex exec --sandbox workspace-write`` を 1 回叩く一発実行。依存なし・確実。
                     バッチ画像生成では app-server より管理が容易で安定（既定）。
 - ``app-server``  : ``codex app-server`` を stdio JSON-RPC で駆動する常駐サーバ方式。
                     対話履歴を引き継ぎたい/外部アプリから叩きたい用途向け。experimental。
@@ -271,7 +271,7 @@ def _generate_via_exec(
     billing: str = "subscription",
     reference_images: Optional[list] = None,
 ) -> CodexResult:
-    """``codex exec --full-auto`` を1回実行して画像を得る。
+    """``codex exec --sandbox workspace-write`` を1回実行して画像を得る。
 
     reference_images を渡すと ``codex exec -i`` で添付し、gpt-image-2 の参照入力として
     使わせる（キャラクター・ロゴ等の見た目を固定する用途）。
@@ -288,7 +288,7 @@ def _generate_via_exec(
     cmd = [
         CODEX_BIN, "exec",
         "--skip-git-repo-check",
-        "--full-auto",
+        "--sandbox", "workspace-write",
         # 画像生成ターンはエージェントの深い推論を必要としない。reasoning を軽くして
         # 1枚あたりのターン時間を短縮する（画像そのものの品質は gpt-image-2 が担う）。
         "-c", "model_reasoning_effort=low",
