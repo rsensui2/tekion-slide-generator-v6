@@ -326,6 +326,7 @@ def _run_via_provider(args, provider_name: str) -> bool:
         output_path=args.output,
         api_key=api_key,
         image_size=args.image_size,
+        aspect=args.aspect,
         max_retries=args.max_retries,
         retry_delay=args.retry_delay,
         logo_path=args.logo,
@@ -364,6 +365,9 @@ def main():
                         help='ロゴ・フッター焼き込み前の素画像を保存するディレクトリ（差分編集用。v6）')
     parser.add_argument('--skip-finish', action='store_true',
                         help='ロゴ合成・フッター焼き込みをスキップ（16:9正規化のみ。v6）')
+    parser.add_argument(
+        '--aspect', default='16:9',
+        help='目標の縦横比（例 4:5）。既定は 16:9')
     parser.add_argument(
         '--image-size', default=DEFAULT_IMAGE_SIZE, choices=sorted(VALID_IMAGE_SIZES),
         help=f'出力解像度（デフォルト: {DEFAULT_IMAGE_SIZE}）'

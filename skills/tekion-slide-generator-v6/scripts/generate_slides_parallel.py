@@ -31,9 +31,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest_utils import (
-    classify_error, get_entry, load_manifest, locked_update, next_version_path,
-    prompt_hash, save_manifest, set_session_status, summarize, update_entry,
-    validate_image,
+    classify_error, get_entry, get_profile, load_manifest, locked_update,
+    next_version_path, prompt_hash, save_manifest, set_session_status, summarize,
+    update_entry, validate_image,
 )
 
 PARALLEL_FLOOR = 2
@@ -72,6 +72,8 @@ def parse_args():
     parser.add_argument('--per-slide-timeout', type=int, default=None,
                         help='1スライド生成の上限秒（未指定: gemini/openai=240, codex=600, mock=60）')
     parser.add_argument('--logo', help='Logo image path to include in each slide generation')
+    parser.add_argument('--aspect', default=None,
+                        help='目標の縦横比。既定は台帳の deck_profile.aspect（無ければ 16:9）')
     parser.add_argument('--image-size', default='2K', choices=['512px', '1K', '2K', '4K'], help='Output resolution (default: 2K)')
     parser.add_argument('--with-dashboard', action='store_true',
                         help='生成と同一プロセスでダッシュボードを起動し、生成後はレビュー送信まで待つ'
@@ -180,6 +182,7 @@ def run_child(task: dict, args, retry_script: str, per_slide_timeout: int) -> tu
         '--api-key', args.api_key,
         '--max-retries', str(args.max_retries),
         '--image-size', args.image_size,
+        '--aspect', args.aspect,
     ]
     if args.provider == 'gemini':
         cmd.extend(['--thinking-level', args.thinking_level])
@@ -225,7 +228,7 @@ def worker(task: dict, args, retry_script: str, per_slide_timeout: int,
         success, error_msg = run_child(task, args, retry_script, per_slide_timeout)
         if success:
             # 生成物の機械検証（デコード・サイズ・アスペクト・白紙検知）
-            problem = validate_image(task['output_path'])
+            problem = validate_image(task['output_path'], aspect=args.aspect)
             if problem:
                 success = False
                 error_msg = f"validation failed: {problem}"
@@ -271,14 +274,14 @@ def build_tasks(prompt_files, args, manifest, images_dir, raw_dir,
                 and entry.get('state') == 'validated'
                 and entry.get('prompt_sha256') == p_hash
                 and entry.get('current_image')
-                and validate_image(entry['current_image']) is None):
+                and validate_image(entry['current_image'], aspect=args.aspect) is None):
             skipped += 1
             continue
 
         # 健全な既存版があるスライドの再生成（プロンプト変更・--force）は、<base>.png を
         # 上書きせず次の版番号で保存する（過去版・バージョン比較・ロールバックを守る）
         current = entry.get('current_image')
-        if current and os.path.exists(current) and validate_image(current) is None:
+        if current and os.path.exists(current) and validate_image(current, aspect=args.aspect) is None:
             versions = [v for v in (entry.get('versions') or [current]) if os.path.exists(v)]
             if current not in versions:
                 versions.append(current)
@@ -419,6 +422,8 @@ def main():
     manifest_path = args.manifest or os.path.join(
         os.path.dirname(os.path.abspath(args.output_dir)), 'manifest.json')
     manifest = load_manifest(manifest_path)
+    if not args.aspect:
+        args.aspect = get_profile(manifest)['aspect']
 
     prompt_files = sorted(
         glob.glob(os.path.join(args.prompts_dir, '*.txt')),

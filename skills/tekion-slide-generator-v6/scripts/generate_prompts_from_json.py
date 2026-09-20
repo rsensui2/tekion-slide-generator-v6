@@ -26,6 +26,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Any
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from manifest_utils import target_dims  # noqa: E402
+
 try:
     from jinja2 import Template, Environment, FileSystemLoader
 except ImportError:
@@ -278,12 +281,12 @@ def generate_single_prompt(args: tuple) -> tuple:
     単一スライドのプロンプトを生成
 
     Args:
-        args: (slide_data, template_path, shared_resources, output_dir, per_file_counters, chapter_context, resolution)
+        args: (slide_data, template_path, shared_resources, output_dir, per_file_counters, chapter_context, resolution, aspect)
 
     Returns:
         (slide_number, output_path, success)
     """
-    slide_data, template_path, shared_resources, output_dir, per_file_counters, chapter_context, resolution = args
+    slide_data, template_path, shared_resources, output_dir, per_file_counters, chapter_context, resolution, aspect = args
 
     try:
         slide_number = slide_data.get('slide_number', 0)
@@ -297,7 +300,8 @@ def generate_single_prompt(args: tuple) -> tuple:
             slide=slide_data,
             design_guidelines=shared_resources['design_guidelines'],
             chapter_context=chapter_context,
-            resolution=resolution
+            resolution=resolution,
+            aspect=aspect
         )
 
         # ソースファイルからベース名を抽出
@@ -367,6 +371,10 @@ def main():
         help='Path to design guidelines markdown file (default: skill references/design_guidelines.md)'
     )
     parser.add_argument(
+        '--aspect', default='16:9',
+        help='目標の縦横比（例 4:5）。既定は 16:9'
+    )
+    parser.add_argument(
         '--image-size',
         default='2K',
         choices=['512px', '1K', '2K', '4K'],
@@ -423,7 +431,11 @@ def main():
         print(f"Per-slide _style override: enabled")
 
     # 解像度マッピング
-    resolution = RESOLUTION_MAP.get(args.image_size, "2560x1440")
+    if args.aspect and args.aspect != "16:9":
+        _w, _h = target_dims(args.aspect, args.image_size)
+        resolution = f"{_w}x{_h}"
+    else:
+        resolution = RESOLUTION_MAP.get(args.image_size, "2560x1440")
     print(f"Image size: {args.image_size} → resolution: {resolution}")
 
     # JSONプラン読み込み
@@ -480,7 +492,7 @@ def main():
         (slide, str(resolve_template_for_slide(slide)), shared_resources, str(output_dir),
          {slide.get('source_file', ''): slide.get('_file_slide_number', 1)},
          chapter_contexts.get(idx),
-         resolution)
+         resolution, args.aspect)
         for idx, slide in enumerate(slides)
     ]
 
