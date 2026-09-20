@@ -40,8 +40,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from manifest_utils import (
-    get_entry, load_manifest, locked_update, next_version_path, save_manifest,
-    update_entry, validate_image,
+    get_entry, get_profile, load_manifest, locked_update, next_version_path,
+    save_manifest, update_entry, validate_image,
 )
 
 EDIT_PROMPT_TEMPLATE = """あなたはプレゼンテーションスライドの編集者です。
@@ -53,7 +53,7 @@ EDIT_PROMPT_TEMPLATE = """あなたはプレゼンテーションスライドの
 [編集の規律]
 - 指示された変更のみを適用すること。
 - レイアウト・配色・フォントの性格・他のテキスト・図形は、参照画像と視覚的に同一に保つこと。
-- 16:9 のアスペクト比を厳守。テキストは鮮明・正確なスペルで描画する。
+- {aspect} のアスペクト比を厳守。テキストは鮮明・正確なスペルで描画する。
 - マークダウン記号（*, #, - など）を文字として描画しない。
 """
 
@@ -68,7 +68,7 @@ MARK_EDIT_PROMPT_TEMPLATE = """あなたはプレゼンテーションスライ�
 [出力の規律]
 - 完成版には注釈・赤マーク・選択枠・指示文を一切含めない。
 - 注釈領域の外は、参照画像と視覚的に同一に保つこと。
-- 16:9 のアスペクト比を厳守。テキストは鮮明・正確なスペルで描画する。
+- {aspect} のアスペクト比を厳守。テキストは鮮明・正確なスペルで描画する。
 """
 
 
@@ -129,6 +129,7 @@ def main():
     manifest = load_manifest(manifest_path)
     slide_base = args.slide
     entry = get_entry(manifest, slide_base)
+    aspect = get_profile(manifest)["aspect"]
 
     if args.rollback:
         return rollback(manifest, manifest_path, slide_base)
@@ -177,9 +178,9 @@ def main():
                            "この指示を反映し、前とは異なる新しいデザイン・構成で作ること。")
         elif args.instruction:
             # 取り込みスライド等プロンプトが無い場合は、指示そのものから作る
-            prompt = EDIT_PROMPT_TEMPLATE.format(instruction=args.instruction).replace(
+            prompt = EDIT_PROMPT_TEMPLATE.format(instruction=args.instruction, aspect=aspect).replace(
                 "添付の参照画像は「現在のスライド」です。これを編集して完成版を返してください。",
-                "16:9 の日本語プレゼンテーションスライドを新規に1枚生成してください。")
+                f"{aspect} の日本語プレゼンテーションスライドを新規に1枚生成してください。")
         else:
             print(f"❌ 作り直し不可: {slide_base} の生成プロンプトが見つかりません"
                   f"（--instruction で作り直しの内容を指定してください）")
@@ -218,12 +219,12 @@ def main():
             f"\n[作者の指示]\n{args.instruction}\n" if args.instruction
             else "\n注釈が領域の指定のみの場合は、その領域をスライド内での役割を保ったまま改善・簡素化すること。\n"
         )
-        prompt = MARK_EDIT_PROMPT_TEMPLATE.format(instruction_block=instruction_block)
+        prompt = MARK_EDIT_PROMPT_TEMPLATE.format(instruction_block=instruction_block, aspect=aspect)
         # 注釈は焼き込み済み画像に書かれるため、仕上げ再適用はしない（既に焼き込み済みの見た目を保持）
         edit_from_raw = False
     else:
         reference = raw_image or current
-        prompt = EDIT_PROMPT_TEMPLATE.format(instruction=args.instruction)
+        prompt = EDIT_PROMPT_TEMPLATE.format(instruction=args.instruction, aspect=aspect)
         edit_from_raw = raw_image is not None
         if not edit_from_raw:
             print("⚠️  raw 画像が無いため、焼き込み済み画像から編集します"
@@ -262,6 +263,7 @@ def main():
         output_path=output_path,
         api_key="",
         image_size=args.image_size,
+        aspect=aspect,
         max_retries=args.max_retries,
         reference_image_path=reference,
         reference_images=extra_refs,
@@ -279,7 +281,7 @@ def main():
         print(f"❌ 編集失敗: {response.error}")
         return 1
 
-    problem = validate_image(output_path)
+    problem = validate_image(output_path, aspect=aspect)
     if problem:
         print(f"❌ 生成画像が検証に失敗: {problem}")
         try:

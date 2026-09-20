@@ -43,7 +43,13 @@ SIZE_MAP = {
 }
 
 
-def _target_dims(size_label: str) -> tuple[int, int]:
+def _target_dims(size_label: str, aspect: str = "16:9") -> tuple[int, int]:
+    if aspect and aspect != "16:9":
+        scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from manifest_utils import target_dims  # type: ignore
+        return target_dims(aspect, size_label)
     spec = SIZE_MAP.get(size_label, "2560x1440")
     w, h = spec.lower().split("x")
     return int(w), int(h)
@@ -178,7 +184,7 @@ class CodexImageProvider(ImageProvider):
             prompt=request.prompt,
             output_path=request.output_path,
             image_size=request.image_size,
-            aspect="16:9",
+            aspect=request.aspect,
             backend="auto",
             max_retries=request.max_retries,
             retry_delay=request.retry_delay,
@@ -194,7 +200,7 @@ class CodexImageProvider(ImageProvider):
             )
 
         try:
-            target_w, target_h = _target_dims(request.image_size)
+            target_w, target_h = _target_dims(request.image_size, request.aspect)
             image_bytes = _normalize_to_16_9(result.image_bytes, target_w, target_h)
 
             # v6: 素の生成画像（ロゴ・フッター前）を保存。差分編集時の参照元になる

@@ -26,9 +26,45 @@ import sys
 from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from manifest_utils import load_manifest, save_manifest, update_entry, validate_image
+from manifest_utils import (get_profile, load_manifest, save_manifest, update_entry,
+                            validate_image)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+# よくある判型。実測比がこの近く（1.5%以内）なら、読みやすい表記に寄せる。
+KNOWN_ASPECTS = ("16:9", "3:2", "4:3", "1:1", "4:5", "3:4", "2:3", "9:16",
+                 "1000:1414", "1414:1000")
+
+
+def measure_aspect(image_path: str) -> str:
+    """画像の実測比を "w:h" 表記で返す。よくある判型なら そちらに寄せる。"""
+    from fractions import Fraction
+    from PIL import Image
+    from manifest_utils import aspect_ratio
+    with Image.open(image_path) as img:
+        w, h = img.size
+    ratio = w / h
+    for known in KNOWN_ASPECTS:
+        target = aspect_ratio(known)
+        if abs(ratio - target) / target <= 0.015:
+            return known
+    fr = Fraction(w, h).limit_denominator(50)
+    return f"{fr.numerator}:{fr.denominator}"
+
+
+def adopt_aspect(manifest: dict, image_path: str) -> None:
+    """まだ何も入っていないセッションなら、取り込んだ絵の比率を台帳に採用する。
+
+    取り込みは「既にある絵を持ち込む」行為なので、比率はこちらが決めるものではなく
+    持ち込まれた側が決める。これを書いておかないと、表示・赤入れ修正・書き出しが
+    16:9 のつもりで動いてしまう。既に profile がある場合は触らない。
+    """
+    if manifest.get("deck_profile") or manifest.get("slides"):
+        return
+    aspect = measure_aspect(image_path)
+    if aspect != "16:9":
+        manifest["deck_profile"] = {"aspect": aspect}
 
 
 def _sanitize_stem(name: str) -> str:
@@ -106,7 +142,8 @@ def import_pptx(pptx_path: str, session_dir: str) -> tuple[list[str], list[int]]
         base = _unique_base(manifest.get("slides", {}), f"{stem}_{idx:02d}")
         out_path = os.path.join(images_dir, f"{base}.png")
         _save_as_png(best_blob, out_path)
-        problem = validate_image(out_path)
+        adopt_aspect(manifest, out_path)
+        problem = validate_image(out_path, aspect=get_profile(manifest)["aspect"])
         if problem:
             print(f"⚠️  slide {idx}: 検証失敗のためスキップ ({problem})", file=sys.stderr)
             os.unlink(out_path)
@@ -143,7 +180,8 @@ def import_pdf(pdf_path: str, session_dir: str) -> tuple[list[str], list[int]]:
             base = _unique_base(manifest.get("slides", {}), f"{stem}_{idx:02d}")
             out_path = os.path.join(images_dir, f"{base}.png")
             pix.save(out_path)
-            problem = validate_image(out_path)
+            adopt_aspect(manifest, out_path)
+            problem = validate_image(out_path, aspect=get_profile(manifest)["aspect"])
             if problem:
                 print(f"⚠️  page {idx}: 検証失敗のためスキップ ({problem})", file=sys.stderr)
                 os.unlink(out_path)
@@ -199,7 +237,8 @@ def import_image(image_path: str, session_dir: str) -> str:
     out_path = os.path.join(images_dir, f"{base}.png")
     with open(image_path, "rb") as f:
         _save_as_png(f.read(), out_path)
-    problem = validate_image(out_path)
+    adopt_aspect(manifest, out_path)
+    problem = validate_image(out_path, aspect=get_profile(manifest)["aspect"])
     if problem:
         os.unlink(out_path)
         raise ValueError(f"画像の検証に失敗: {problem}")

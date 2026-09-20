@@ -79,6 +79,26 @@ def aspect_ratio(aspect: str) -> float:
     return 16 / 9
 
 
+# 共通サイズラベルの画素数（16:9 の既定解像度と同じ総画素）。
+# 縦横比が変わっても「同じ精細さ」になるよう、総画素を保って幅と高さを割り振る。
+SIZE_PIXELS = {
+    "512px": 1280 * 720,
+    "1K": 1792 * 1008,
+    "2K": 2560 * 1440,
+    "4K": 3840 * 2160,
+}
+
+
+def target_dims(aspect: str = "16:9", size_label: str = "2K") -> tuple:
+    """縦横比とサイズラベルから目標解像度 (w, h) を返す。8の倍数に丸める。"""
+    import math
+    pixels = SIZE_PIXELS.get(size_label, SIZE_PIXELS["2K"])
+    r = aspect_ratio(aspect)
+    h = math.sqrt(pixels / r)
+    w = h * r
+    return (max(8, int(round(w / 8)) * 8), max(8, int(round(h / 8)) * 8))
+
+
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 

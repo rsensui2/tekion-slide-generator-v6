@@ -92,7 +92,7 @@ important_note_about_content: |
 ---
 
 output_spec:
-  aspect_ratio: "16:9"
+  aspect_ratio: "{{ aspect | default('16:9') }}"
   resolution: "{{ resolution | default('2560x1440') }}"
   font_size: "タイトルは極大（スライド高さの10-15%）。本文テキストがある場合は小さめで余白の中に"
   margin: "全辺に大胆な余白（10-15%）。要素を画面中央付近に集中配置"

@@ -65,7 +65,7 @@ content: |
 ---
 
 output_spec:
-  aspect_ratio: "16:9"
+  aspect_ratio: "{{ aspect | default('16:9') }}"
   resolution: "{{ resolution | default('2560x1440') }}"
   font_size: "見出しと本文で十分な差をつけ、テキスト階層を明確にする"
   margin: "全辺5%"

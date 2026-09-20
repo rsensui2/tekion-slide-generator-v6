@@ -21,6 +21,7 @@ class ImageRequest:
 
     # 共通オプション
     image_size: str = "2K"  # 共通ラベル: 512px / 1K / 2K / 4K
+    aspect: str = "16:9"    # 目標の縦横比（"4:5" 等。台帳の deck_profile から来る）
     max_retries: int = 3
     retry_delay: float = 2.0
 
